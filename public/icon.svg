@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="itg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C7512E"/>
+      <stop offset="100%" stop-color="#8F3216"/>
+    </linearGradient>
+    <linearGradient id="ringG" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#itg)"/>
+  
+  <!-- Outer mesh signal arcs -->
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#FAF7F2" stroke-width="12" stroke-opacity="0.25" stroke-dasharray="16 12"/>
+  <circle cx="256" cy="256" r="115" fill="none" stroke="url(#ringG)" stroke-width="16" stroke-linecap="round" stroke-dasharray="80 30"/>
+  <circle cx="256" cy="256" r="70" fill="none" stroke="#FAF7F2" stroke-width="14" stroke-linecap="round"/>
+  
+  <!-- Central node / pulse -->
+  <circle cx="256" cy="256" r="32" fill="#FFFFFF"/>
+  <circle cx="256" cy="256" r="18" fill="#C7512E"/>
+
+  <!-- Tactical Nodes -->
+  <circle cx="160" cy="210" r="12" fill="#FDE68A"/>
+  <line x1="160" y1="210" x2="230" y2="245" stroke="#FDE68A" stroke-width="6" stroke-linecap="round"/>
+  
+  <circle cx="352" cy="210" r="12" fill="#FDE68A"/>
+  <line x1="352" y1="210" x2="282" y2="245" stroke="#FDE68A" stroke-width="6" stroke-linecap="round"/>
+
+  <circle cx="256" cy="370" r="12" fill="#FDE68A"/>
+  <line x1="256" y1="370" x2="256" y2="288" stroke="#FDE68A" stroke-width="6" stroke-linecap="round"/>
+</svg>

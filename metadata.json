@@ -1,0 +1,6 @@
+{
+  "name": "iTantra",
+  "description": "Offline-first multilingual voice communication system for 10 Indian languages with push-to-talk, binary packet mesh transport, real-time speech-to-text, and local audio synthesis.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
