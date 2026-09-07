@@ -39,7 +39,58 @@ import { SpeechEngine } from '../utils/speechEngine';
 import { WerCalculator } from '../utils/werCalculator';
 import { SyncManager } from '../utils/syncManager';
 import { ConnectionManager } from '../utils/connectionManager';
-import { getOrCreateDeviceId, getOrCreateDeviceName } from '../utils/deviceIdentity';
+import { FirebaseService } from '../utils/firebaseService';
+
+const STORAGE_DEVICE_ID_KEY = 'itantra_device_id';
+const STORAGE_DEVICE_NAME_KEY = 'itantra_device_name';
+
+/**
+ * Gets or creates a unique device ID per browser session using sessionStorage.
+ * Guarantees every tab/window receives its own isolated unique unit identifier,
+ * replacing static hardcoded IDs.
+ */
+export function getOrCreateDeviceId(): string {
+  if (typeof window === 'undefined') {
+    return `unit_${Math.random().toString(36).substring(2, 8)}`;
+  }
+
+  try {
+    let deviceId = sessionStorage.getItem(STORAGE_DEVICE_ID_KEY);
+    if (!deviceId) {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        deviceId = `unit_${crypto.randomUUID().substring(0, 8)}`;
+      } else {
+        deviceId = `unit_${Math.random().toString(36).substring(2, 8)}`;
+      }
+      sessionStorage.setItem(STORAGE_DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+  } catch {
+    return `unit_${Math.random().toString(36).substring(2, 8)}`;
+  }
+}
+
+/**
+ * Gets or creates a human-readable local unit name per browser session.
+ */
+export function getOrCreateDeviceName(idSuffix?: string): string {
+  if (typeof window === 'undefined') {
+    return 'Field Unit';
+  }
+
+  try {
+    let name = sessionStorage.getItem(STORAGE_DEVICE_NAME_KEY);
+    if (!name) {
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const suffix = idSuffix || Math.random().toString(36).substring(2, 6).toUpperCase();
+      name = isMobile ? `Mobile Unit (${suffix})` : `Station Alpha (${suffix})`;
+      sessionStorage.setItem(STORAGE_DEVICE_NAME_KEY, name);
+    }
+    return name;
+  } catch {
+    return 'Field Unit Alpha';
+  }
+}
 
 /**
  * FSM internal state structure managed by the reducer.
@@ -675,11 +726,64 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
       }
     });
 
+    // Firebase Realtime Database: Register presence & subscribe to cloud mesh nodes
+    FirebaseService.publishDevice(localDevice);
+
+    const unsubFirebaseDevices = FirebaseService.subscribeToDevices(localDevice.deviceId, (nodes) => {
+      if (nodes && nodes.length > 0) {
+        setDiscoveredDevices((prev) => {
+          const merged = [...nodes];
+          for (const d of prev) {
+            if (!merged.some((n) => n.deviceId === d.deviceId)) {
+              merged.push(d);
+            }
+          }
+          return merged;
+        });
+      }
+    });
+
+    // Firebase Realtime Database: Real-time incoming message retrieval
+    const unsubFirebaseMessages = FirebaseService.subscribeToMessages(localDevice.deviceId, (packet) => {
+      console.log(`[FIREBASE-RTDB-SINK] Incoming packet received from: ${packet.senderDeviceId}, text: "${packet.textPayload}"`);
+      if (packet.senderDeviceId !== localDevice.deviceId) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.messageId === packet.messageId)) return prev;
+          return [packet, ...prev];
+        });
+
+        if (packet.priority === 'CRITICAL') {
+          setActiveEmergencyAlert(packet);
+          AudioSynthesizer.playEmergencySiren();
+        } else {
+          AudioSynthesizer.playChirp(false);
+        }
+
+        fsmDispatch({
+          type: 'TRANSITION_SYNTHESIZING',
+          reason: 'Received incoming Firebase RTDB packet',
+          statusText: `Receiving packet from ${packet.senderDeviceId}...`,
+        });
+
+        playVoicePacket(packet);
+
+        setTimeout(() => {
+          fsmDispatch({
+            type: 'TRANSITION_IDLE',
+            reason: 'Packet playback complete',
+            statusText: `Received transmission (${packet.packetSizeBytes} Bytes) from ${packet.senderDeviceId}`,
+          });
+        }, 1200);
+      }
+    });
+
     return () => {
       unsubStatus();
       unsubPackets();
       unsubMetrics();
       unsubNodes();
+      if (unsubFirebaseDevices) unsubFirebaseDevices();
+      if (unsubFirebaseMessages) unsubFirebaseMessages();
     };
   }, [localDevice]);
 
@@ -1009,9 +1113,10 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
       totalDataTransmittedBytes: prev.totalDataTransmittedBytes + encodedBytes.length,
     }));
 
-    // Broadcast across mesh via ConnectionManager and BroadcastChannel
-    console.log(`[TRANSPORT-EXIT] Emitting binary packet frame (${encodedBytes.length}B) over ConnectionManager...`);
+    // Broadcast across mesh via ConnectionManager, Firebase Realtime Database, and BroadcastChannel
+    console.log(`[TRANSPORT-EXIT] Emitting binary packet frame (${encodedBytes.length}B) over ConnectionManager & Firebase RTDB...`);
     ConnectionManager.sendPacket(finalizedPacket);
+    FirebaseService.publishMessage(finalizedPacket);
 
     if (broadcastChannelRef.current) {
       try {
@@ -1187,8 +1292,12 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     AudioSynthesizer.playChirp(true);
     fsmDispatch({
       type: 'SET_STATUS_BANNER',
-      text: 'Scanning mesh network for nearby devices...',
+      text: 'Scanning mesh network & Firebase RTDB for nearby devices...',
     });
+    // Publish and ping self on Firebase RTDB
+    FirebaseService.publishDevice(localDevice);
+    FirebaseService.pingDevice(localDevice.deviceId);
+
     try {
       const res = await fetch(`/api/mesh/nodes?exclude=${encodeURIComponent(localDevice.deviceId)}`);
       if (res.ok) {

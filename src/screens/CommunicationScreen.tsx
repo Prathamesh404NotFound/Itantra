@@ -71,32 +71,6 @@ export const CommunicationScreen: React.FC = () => {
 
   return (
     <div id="screen_communication" className="space-y-3.5 sm:space-y-4">
-      {/* Top Walkthrough / Two Phones Notice */}
-      <div className="flex flex-col min-[480px]:flex-row min-[480px]:items-center justify-between gap-2 p-2.5 sm:p-3 rounded-2xl bg-[#F4ECE4] border border-[#E8E0D5] text-xs">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-[#C7512E] shrink-0" />
-          <span className="font-semibold text-[#26211E] text-xs">
-            Direct P2P Mesh Walkie-Talkie
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5 self-end min-[480px]:self-auto">
-          <button
-            onClick={() => setShowDemoDialog(true)}
-            aria-label="Open Interactive Demo"
-            className="px-2.5 py-1.5 min-h-[36px] rounded-lg bg-[#FFFFFF] border border-[#E8E0D5] font-bold text-[#C7512E] hover:bg-[#FCEEE8] transition-colors active:scale-95"
-          >
-            Interactive Demo
-          </button>
-          <button
-            onClick={() => setShowTwoPhonesGuide(true)}
-            aria-label="Open 2 Phones Field Setup Guide"
-            className="px-2.5 py-1.5 min-h-[36px] rounded-lg bg-[#C7512E] text-white font-bold hover:bg-[#A83F20] transition-colors active:scale-95"
-          >
-            2 Phones Guide
-          </button>
-        </div>
-      </div>
-
       {/* Responsive Main Layout: Single column on Mobile/Tablet, Ergonomic Dual-Column on Desktop */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 items-start">
         {/* Left Column: Voice Transmission Controls */}
