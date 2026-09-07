@@ -201,7 +201,26 @@ export type DeliveryState =
   | 'DELIVERED'
   | 'FAILED';
 
-export type VoiceState = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SENDING' | 'DELIVERED' | 'ERROR';
+export type FsmState = 'IDLE' | 'CAPTURING' | 'PROCESSING' | 'TRANSMITTING' | 'SYNTHESIZING' | 'ERROR';
+export type VoiceState = FsmState;
+
+export interface StateTransition {
+  from: FsmState;
+  to: FsmState;
+  timestamp: number;
+  reason?: string;
+}
+
+export type ToastType = 'error' | 'warning' | 'info' | 'success';
+
+export interface ToastNotification {
+  id: string;
+  type: ToastType;
+  title: string;
+  message: string;
+  timestamp: number;
+  durationMs?: number;
+}
 
 export type TransportType = 'WIFI_DIRECT' | 'BLUETOOTH' | 'LOCAL_SOCKET' | 'SIMULATION';
 
@@ -234,6 +253,8 @@ export interface VoicePacket {
   packetSizeBytes: number;
   bandwidthReductionPercent: number;
   latencyMs: number;
+  audioBlobUrl?: string;
+  hasRealVoiceAudio?: boolean;
 }
 
 export interface PerformanceMetrics {

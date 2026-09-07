@@ -4,6 +4,9 @@ class AudioSynthesizerManager {
   private mediaStream: MediaStream | null = null;
   private analyser: AnalyserNode | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+  private activeAudioElement: HTMLAudioElement | null = null;
 
   private getAudioContext(): AudioContext {
     if (!this.audioCtx) {
@@ -16,7 +19,11 @@ class AudioSynthesizerManager {
     return this.audioCtx;
   }
 
-  // Tactical radio start click/chirp
+  /**
+   * Generates a tactical radio PTT start or end chirp using Web Audio oscillators.
+   *
+   * @param isStart - True for upward initiating PTT chirp, false for downward squelch chirp
+   */
   playChirp(isStart: boolean): void {
     try {
       const ctx = this.getAudioContext();
@@ -51,7 +58,9 @@ class AudioSynthesizerManager {
     }
   }
 
-  // Emergency SOS alert siren tone
+  /**
+   * Generates a 3-pulse emergency tactical alert siren.
+   */
   playEmergencySiren(): void {
     try {
       const ctx = this.getAudioContext();
@@ -80,12 +89,53 @@ class AudioSynthesizerManager {
     }
   }
 
-  // Live microphone amplitude monitor for tactile PTT waveform
-  async startMicrophoneMonitoring(onAmplitude: (amplitude: number) => void): Promise<() => void> {
+  /**
+   * Initializes microphone capture, amplitude monitoring for real-time waveform display,
+   * and MediaRecorder audio chunk streaming.
+   *
+   * @param onAmplitude - Callback receiving normalized 0.0 - 1.0 volume amplitude
+   * @param onError - Optional callback triggered when microphone acquisition fails (e.g. permission denied)
+   * @returns Cleanup teardown function to close stream tracks and recorder
+   */
+  async startMicrophoneMonitoring(
+    onAmplitude: (amplitude: number) => void,
+    onError?: (error: Error) => void
+  ): Promise<() => void> {
     try {
       const ctx = this.getAudioContext();
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        // Initialize MediaRecorder for real-voice capture
+        this.recordedChunks = [];
+        try {
+          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+            ? 'audio/ogg;codecs=opus'
+            : '';
+          this.mediaRecorder = mimeType
+            ? new MediaRecorder(this.mediaStream, { mimeType })
+            : new MediaRecorder(this.mediaStream);
+
+          this.mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              this.recordedChunks.push(event.data);
+            }
+          };
+          this.mediaRecorder.start(100); // chunk every 100ms
+        } catch (recorderErr) {
+          console.warn('MediaRecorder init warning:', recorderErr);
+        }
+
         this.micSource = ctx.createMediaStreamSource(this.mediaStream);
         this.analyser = ctx.createAnalyser();
         this.analyser.fftSize = 256;
@@ -112,6 +162,13 @@ class AudioSynthesizerManager {
 
         return () => {
           active = false;
+          if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            try {
+              this.mediaRecorder.stop();
+            } catch {
+              // Ignore
+            }
+          }
           if (this.mediaStream) {
             this.mediaStream.getTracks().forEach((track) => track.stop());
             this.mediaStream = null;
@@ -124,10 +181,78 @@ class AudioSynthesizerManager {
           onAmplitude(0);
         };
       }
-    } catch {
-      // If mic permission denied or not supported, return no-op
+    } catch (err) {
+      if (onError && err instanceof Error) {
+        onError(err);
+      }
     }
     return () => {};
+  }
+
+  /**
+   * Retrieves the packaged audio Blob and object URL from the most recent recording session.
+   *
+   * @returns Object with blob, object URL, and byte size, or null if no chunks captured
+   */
+  async getRecordedAudioBlob(): Promise<{ blob: Blob; url: string; sizeBytes: number } | null> {
+    // Wait briefly for final dataavailable event
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    if (this.recordedChunks.length === 0) {
+      return null;
+    }
+
+    const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+    const blob = new Blob(this.recordedChunks, { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const sizeBytes = blob.size;
+    this.recordedChunks = [];
+
+    return { blob, url, sizeBytes };
+  }
+
+  /**
+   * Plays a recorded voice audio blob URL through an HTML Audio element.
+   *
+   * @param blobUrl - Blob URL to play
+   * @param onEnd - Completion callback
+   */
+  playAudioBlob(blobUrl: string, onEnd?: () => void): void {
+    try {
+      if (this.activeAudioElement) {
+        this.activeAudioElement.pause();
+        this.activeAudioElement = null;
+      }
+      const audio = new Audio(blobUrl);
+      this.activeAudioElement = audio;
+      audio.onended = () => {
+        this.activeAudioElement = null;
+        if (onEnd) onEnd();
+      };
+      audio.onerror = () => {
+        this.activeAudioElement = null;
+        if (onEnd) onEnd();
+      };
+      audio.play().catch(() => {
+        if (onEnd) onEnd();
+      });
+    } catch {
+      if (onEnd) onEnd();
+    }
+  }
+
+  /**
+   * Halts any actively playing audio elements.
+   */
+  stopAllPlayback(): void {
+    if (this.activeAudioElement) {
+      try {
+        this.activeAudioElement.pause();
+      } catch {
+        // Ignore
+      }
+      this.activeAudioElement = null;
+    }
   }
 }
 

@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { VoicePacket, LANGUAGES } from '../types';
-import { Play, AlertTriangle, CheckCheck, Wifi } from 'lucide-react';
+import { Play, AlertTriangle, CheckCheck, Wifi, Mic, Volume2 } from 'lucide-react';
+import { AudioSynthesizer } from '../utils/audioSynthesizer';
 
 interface MessageCardProps {
   packet: VoicePacket;
@@ -8,9 +9,19 @@ interface MessageCardProps {
 }
 
 export const MessageCard: React.FC<MessageCardProps> = ({ packet, onReplay }) => {
+  const [isPlayingOriginal, setIsPlayingOriginal] = useState(false);
   const isEmergency = packet.priority === 'CRITICAL';
   const srcLang = LANGUAGES[packet.sourceLanguage];
   const dstLang = LANGUAGES[packet.targetLanguage];
+
+  const handlePlayOriginalVoice = () => {
+    if (packet.audioBlobUrl) {
+      setIsPlayingOriginal(true);
+      AudioSynthesizer.playAudioBlob(packet.audioBlobUrl, () => {
+        setIsPlayingOriginal(false);
+      });
+    }
+  };
 
   return (
     <div
@@ -34,6 +45,12 @@ export const MessageCard: React.FC<MessageCardProps> = ({ packet, onReplay }) =>
             {srcLang ? srcLang.displayName : packet.sourceLanguage} →{' '}
             {dstLang ? dstLang.displayName : packet.targetLanguage}
           </span>
+          {packet.hasRealVoiceAudio && (
+            <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-[#ECFDF5] border border-[#A7F3D0] text-[#065F46] text-[9px] font-bold">
+              <Mic className="w-2.5 h-2.5 text-[#059669]" />
+              Live Mic
+            </span>
+          )}
         </div>
 
         {/* Compression & Size Badges */}
@@ -60,7 +77,7 @@ export const MessageCard: React.FC<MessageCardProps> = ({ packet, onReplay }) =>
         </div>
       )}
 
-      {/* Footer info: Delivery channel & Latency + Replay Audio Button */}
+      {/* Footer info: Delivery channel & Latency + Replay Audio Buttons */}
       <div className="mt-3 pt-2.5 border-t border-[#F4ECE4] flex items-center justify-between text-[11px] text-[#9E948A]">
         <div className="flex items-center gap-1.5">
           <Wifi className="w-3 h-3 text-[#B45309]" />
@@ -68,14 +85,31 @@ export const MessageCard: React.FC<MessageCardProps> = ({ packet, onReplay }) =>
           <CheckCheck className="w-3.5 h-3.5 text-[#B45309]" />
         </div>
 
-        <button
-          onClick={onReplay}
-          title="Replay Audio Synthesis"
-          className="flex items-center gap-1 px-2 py-1 rounded-full bg-[#FCEEE8] hover:bg-[#F4ECE4] text-[#C7512E] font-bold text-xs transition-colors active:scale-95"
-        >
-          <Play className="w-3 h-3 fill-[#C7512E]" />
-          <span>Voice</span>
-        </button>
+        <div className="flex items-center gap-1.5">
+          {packet.audioBlobUrl && (
+            <button
+              onClick={handlePlayOriginalVoice}
+              title="Play Real Voice Recording"
+              className={`flex items-center gap-1 px-2 py-1 rounded-full font-bold text-xs transition-colors active:scale-95 ${
+                isPlayingOriginal
+                  ? 'bg-[#059669] text-white'
+                  : 'bg-[#ECFDF5] hover:bg-[#D1FAE5] text-[#065F46] border border-[#A7F3D0]'
+              }`}
+            >
+              <Mic className="w-3 h-3" />
+              <span>{isPlayingOriginal ? 'Playing...' : 'Real Voice'}</span>
+            </button>
+          )}
+
+          <button
+            onClick={onReplay}
+            title="Replay Target Voice Synthesis (TTS)"
+            className="flex items-center gap-1 px-2 py-1 rounded-full bg-[#FCEEE8] hover:bg-[#F4ECE4] text-[#C7512E] font-bold text-xs transition-colors active:scale-95 border border-[#F5D0C5]"
+          >
+            <Volume2 className="w-3 h-3 text-[#C7512E]" />
+            <span>TTS</span>
+          </button>
+        </div>
       </div>
     </div>
   );

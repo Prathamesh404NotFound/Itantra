@@ -1,4 +1,29 @@
+import { z } from 'zod';
 import { VoicePacket, LanguageCode, Priority, DeliveryState } from '../types';
+
+/**
+ * Zod validation schema for VoicePacket data structures
+ */
+export const VoicePacketSchema = z.object({
+  messageId: z.string().min(1),
+  senderDeviceId: z.string().min(1),
+  receiverDeviceId: z.string().min(1),
+  sequenceNumber: z.number().int().nonnegative(),
+  sourceLanguage: z.enum(['hi', 'gu', 'mr', 'kn', 'ml', 'ta', 'te', 'or', 'bn', 'en']),
+  targetLanguage: z.enum(['hi', 'gu', 'mr', 'kn', 'ml', 'ta', 'te', 'or', 'bn', 'en']),
+  priority: z.enum(['NORMAL', 'HIGH', 'CRITICAL']),
+  timestamp: z.number().positive(),
+  textPayload: z.string().min(1),
+  translatedText: z.string().optional(),
+  checksum: z.number().int(),
+  deliveryState: z.enum(['QUEUED', 'SENDING', 'SENT', 'RECEIVED', 'DELIVERED', 'FAILED', 'ENCODING', 'DECODING', 'PROCESSING', 'PLAYING']),
+  audioSizeEstimateBytes: z.number().nonnegative(),
+  packetSizeBytes: z.number().positive(),
+  bandwidthReductionPercent: z.number().min(0).max(100),
+  latencyMs: z.number().nonnegative(),
+  audioBlobUrl: z.string().optional(),
+  hasRealVoiceAudio: z.boolean().optional(),
+});
 
 // Standard CRC32 table implementation
 const CRC_TABLE: Uint32Array = (() => {
@@ -13,6 +38,12 @@ const CRC_TABLE: Uint32Array = (() => {
   return table;
 })();
 
+/**
+ * Calculates a standard CRC32 checksum over the provided byte buffer.
+ *
+ * @param bytes - The input buffer to hash
+ * @returns 32-bit unsigned integer checksum
+ */
 export function calculateCrc32(bytes: Uint8Array): number {
   let crc = 0 ^ -1;
   for (let i = 0; i < bytes.length; i++) {
@@ -21,11 +52,18 @@ export function calculateCrc32(bytes: Uint8Array): number {
   return (crc ^ -1) >>> 0;
 }
 
+/**
+ * High-performance binary serializer and deserializer for VoicePacket structures
+ * utilizing standard endianness and CRC32 verification.
+ */
 export class PacketCodec {
   private static readonly MAGIC_HEADER = 0x54414e54; // 'TANT'
 
   /**
-   * Encodes a VoicePacket into a compact binary representation with checksum
+   * Encodes a VoicePacket into a compact binary representation with checksum.
+   *
+   * @param packet - The voice packet object to encode
+   * @returns Binary encoded buffer ready for mesh radio or socket transmission
    */
   static encode(packet: VoicePacket): Uint8Array {
     const encoder = new TextEncoder();
@@ -72,7 +110,10 @@ export class PacketCodec {
   }
 
   /**
-   * Decodes binary buffer into a VoicePacket
+   * Decodes binary buffer into a validated VoicePacket using Zod schema verification.
+   *
+   * @param bytes - The raw byte array received over the wire
+   * @returns Validated VoicePacket or null if corrupt, invalid magic, or failed CRC32
    */
   static decode(bytes: Uint8Array): VoicePacket | null {
     if (bytes.length < 28) return null;
@@ -124,7 +165,7 @@ export class PacketCodec {
       Math.min(99.9, ((audioSizeEstimateBytes - packetSizeBytes) / audioSizeEstimateBytes) * 100)
     );
 
-    return {
+    const rawCandidate: VoicePacket = {
       messageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
       senderDeviceId: 'remote_peer',
       receiverDeviceId: 'local_device',
@@ -142,5 +183,14 @@ export class PacketCodec {
       bandwidthReductionPercent: reductionPercent,
       latencyMs: 142,
     };
+
+    // Strict Zod schema verification
+    const parseResult = VoicePacketSchema.safeParse(rawCandidate);
+    if (!parseResult.success) {
+      console.error('PacketCodec schema validation failure:', parseResult.error.format());
+      return null;
+    }
+
+    return parseResult.data as VoicePacket;
   }
 }

@@ -5,16 +5,19 @@ import {
   ArrowRight,
   Sparkles,
   CheckCircle,
-  Play,
   Volume2,
   X,
   Radio,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { SpeechEngine } from '../utils/speechEngine';
 
 export const InteractiveDemoDialog: React.FC = () => {
-  const { showDemoDialog, setShowDemoDialog } = useCommunicator();
+  const { showDemoDialog, setShowDemoDialog, addToast, fsmState } = useCommunicator();
   const [currentStep, setCurrentStep] = useState(0);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   if (!showDemoDialog) return null;
 
@@ -47,11 +50,31 @@ export const InteractiveDemoDialog: React.FC = () => {
   ];
 
   const handleTestAudio = () => {
+    if (isSynthesizing) return;
+    setIsSynthesizing(true);
+    setAudioError(null);
+
     SpeechEngine.speak({
       text: 'हमें पीने के पानी की तत्काल आवश्यकता है।',
       language: 'hi',
       rate: 1.0,
       volume: 1.0,
+      onStart: () => {
+        setIsSynthesizing(true);
+      },
+      onEnd: () => {
+        setIsSynthesizing(false);
+      },
+      onError: (err) => {
+        setIsSynthesizing(false);
+        const errMsg = err.message || 'TTS synthesis failed';
+        setAudioError(errMsg);
+        addToast({
+          type: 'error',
+          title: 'Speech Synthesis Failed',
+          message: errMsg,
+        });
+      },
     });
   };
 
@@ -104,9 +127,14 @@ export const InteractiveDemoDialog: React.FC = () => {
         {/* Step Explanation Card */}
         <div className="p-3.5 sm:p-4 rounded-2xl bg-[#FCEEE8] border border-[#C7512E]/30 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] sm:text-xs font-bold text-[#C7512E] uppercase tracking-wider">
-              {steps[currentStep].title}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] sm:text-xs font-bold text-[#C7512E] uppercase tracking-wider">
+                {steps[currentStep].title}
+              </span>
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-white text-[#C7512E] border border-[#C7512E]/20">
+                FSM: {fsmState}
+              </span>
+            </div>
             <span className="text-xs font-mono font-bold text-[#6B625B]">
               {currentStep + 1} / {steps.length}
             </span>
@@ -120,16 +148,28 @@ export const InteractiveDemoDialog: React.FC = () => {
             <CheckCircle className="w-3.5 h-3.5 shrink-0" />
             <span>{steps[currentStep].highlight}</span>
           </div>
+
+          {audioError && (
+            <div className="flex items-center gap-1.5 p-2 rounded-xl bg-[#FFF5F5] border border-[#FED7D7] text-xs font-semibold text-[#DC2626]">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{audioError}</span>
+            </div>
+          )}
         </div>
 
         {/* Step Controls */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#F4ECE4]">
           <button
             onClick={handleTestAudio}
-            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-xl bg-[#FAF7F2] hover:bg-[#F4ECE4] border border-[#E8E0D5] text-xs font-bold text-[#26211E] transition-colors"
+            disabled={isSynthesizing}
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-xl bg-[#FAF7F2] hover:bg-[#F4ECE4] disabled:opacity-60 border border-[#E8E0D5] text-xs font-bold text-[#26211E] transition-colors"
           >
-            <Volume2 className="w-3.5 h-3.5 text-[#C7512E]" />
-            <span>Test Hindi Audio</span>
+            {isSynthesizing ? (
+              <Loader2 className="w-3.5 h-3.5 text-[#C7512E] animate-spin" />
+            ) : (
+              <Volume2 className="w-3.5 h-3.5 text-[#C7512E]" />
+            )}
+            <span>{isSynthesizing ? 'Synthesizing...' : 'Test Hindi Audio'}</span>
           </button>
 
           <div className="flex items-center gap-2">

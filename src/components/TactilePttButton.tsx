@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useCommunicator } from '../context/CommunicatorContext';
-import { Mic, Radio, Loader2, Check } from 'lucide-react';
+import { Mic, Radio, Loader2, Volume2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export const TactilePttButton: React.FC = () => {
@@ -8,15 +8,16 @@ export const TactilePttButton: React.FC = () => {
     voiceState,
     onPttDown,
     onPttUp,
+    resetFsmToIdle,
     liveAmplitude,
     communicationMode,
     partialTranscript,
-    sourceLanguage,
   } = useCommunicator();
 
-  const isListening = voiceState === 'LISTENING';
-  const isProcessing = voiceState === 'PROCESSING' || voiceState === 'SENDING';
-  const isDelivered = voiceState === 'DELIVERED';
+  const isCapturing = voiceState === 'CAPTURING';
+  const isProcessing = voiceState === 'PROCESSING' || voiceState === 'TRANSMITTING';
+  const isSynthesizing = voiceState === 'SYNTHESIZING';
+  const isError = voiceState === 'ERROR';
 
   // Keyboard spacebar shortcut for hands-free or accessibility
   useEffect(() => {
@@ -30,7 +31,7 @@ export const TactilePttButton: React.FC = () => {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && voiceState === 'LISTENING') {
+      if (e.code === 'Space' && voiceState === 'CAPTURING') {
         e.preventDefault();
         onPttUp();
       }
@@ -48,7 +49,7 @@ export const TactilePttButton: React.FC = () => {
     <div className="flex flex-col items-center justify-center my-3 select-none">
       {/* Waveform Visualization Bars */}
       <div className="h-10 flex items-center justify-center gap-1.5 mb-2 w-full max-w-xs">
-        {isListening ? (
+        {isCapturing ? (
           Array.from({ length: 16 }).map((_, i) => {
             // Dynamic bar height based on live amplitude + index variance
             const variance = Math.sin(i * 0.6) * 0.3 + 0.7;
@@ -67,6 +68,16 @@ export const TactilePttButton: React.FC = () => {
             <Loader2 className="w-4 h-4 animate-spin" />
             <span>Transcribing & Translating...</span>
           </div>
+        ) : isSynthesizing ? (
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#16A34A]">
+            <Volume2 className="w-4 h-4 animate-pulse" />
+            <span>Playing Translated Speech...</span>
+          </div>
+        ) : isError ? (
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#DC2626]">
+            <AlertCircle className="w-4 h-4" />
+            <span>Service Issue • Tap to Reset</span>
+          </div>
         ) : (
           <div className="flex items-center gap-2 text-xs font-medium text-[#9E948A]">
             <Radio className="w-3.5 h-3.5" />
@@ -82,7 +93,7 @@ export const TactilePttButton: React.FC = () => {
       {/* Tactile Button with concentric pulse rings */}
       <div className="relative flex items-center justify-center">
         <AnimatePresence>
-          {isListening && (
+          {isCapturing && (
             <>
               <motion.div
                 initial={{ scale: 1, opacity: 0.8 }}
@@ -106,31 +117,41 @@ export const TactilePttButton: React.FC = () => {
           id="btn_tactile_ptt"
           onMouseDown={(e) => {
             e.preventDefault();
-            onPttDown();
+            if (isError) {
+              resetFsmToIdle('User clicked error reset');
+            } else {
+              onPttDown();
+            }
           }}
           onMouseUp={(e) => {
             e.preventDefault();
-            onPttUp();
+            if (!isError) onPttUp();
           }}
           onTouchStart={(e) => {
             e.preventDefault();
-            onPttDown();
+            if (isError) {
+              resetFsmToIdle('User clicked error reset');
+            } else {
+              onPttDown();
+            }
           }}
           onTouchEnd={(e) => {
             e.preventDefault();
-            onPttUp();
+            if (!isError) onPttUp();
           }}
           className={`relative z-10 w-28 h-28 sm:w-32 sm:h-32 rounded-full flex flex-col items-center justify-center text-white transition-all shadow-lg active:scale-95 touch-none ${
-            isListening
+            isCapturing
               ? 'bg-[#A83F20] shadow-[#C7512E]/40 ring-4 ring-[#FCEEE8]'
               : isProcessing
               ? 'bg-[#B45309] ring-2 ring-[#FEF3C7]'
-              : isDelivered
-              ? 'bg-[#B45309]'
+              : isSynthesizing
+              ? 'bg-[#16A34A] ring-2 ring-[#DCFCE7]'
+              : isError
+              ? 'bg-[#DC2626] ring-4 ring-[#FEE2E2]'
               : 'bg-[#C7512E] hover:bg-[#A83F20] shadow-md'
           }`}
         >
-          {isListening ? (
+          {isCapturing ? (
             <motion.div
               animate={{ scale: [1, 1.12, 1] }}
               transition={{ duration: 0.8, repeat: Infinity }}
@@ -148,11 +169,18 @@ export const TactilePttButton: React.FC = () => {
                 Encoding
               </span>
             </div>
-          ) : isDelivered ? (
+          ) : isSynthesizing ? (
             <div className="flex flex-col items-center">
-              <Check className="w-8 h-8 text-white" />
+              <Volume2 className="w-8 h-8 animate-pulse text-white" />
               <span className="text-[10px] font-bold tracking-wider uppercase mt-1">
-                Sent
+                Speaking
+              </span>
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center">
+              <AlertCircle className="w-8 h-8 text-white" />
+              <span className="text-[10px] font-bold tracking-wider uppercase mt-1">
+                Reset
               </span>
             </div>
           ) : (
@@ -167,7 +195,7 @@ export const TactilePttButton: React.FC = () => {
       </div>
 
       {/* Partial speech real-time preview if talking */}
-      {isListening && partialTranscript && (
+      {isCapturing && partialTranscript && (
         <motion.div
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}

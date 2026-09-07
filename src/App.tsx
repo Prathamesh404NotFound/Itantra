@@ -15,11 +15,21 @@ import { AccuracyTestingDialog } from './dialogs/AccuracyTestingDialog';
 import { TtsTestingDialog } from './dialogs/TtsTestingDialog';
 import { ArchitectureDiagramDialog } from './dialogs/ArchitectureDiagramDialog';
 import { TwoPhonesSetupDialog } from './dialogs/TwoPhonesSetupDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastContainer } from './components/ToastContainer';
 import { AppTab } from './types';
 import { Radio, Smartphone, History, Zap, Settings2 } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, selectTab, activeEmergencyAlert, dismissEmergencyAlert } = useCommunicator();
+  const {
+    activeTab,
+    selectTab,
+    activeEmergencyAlert,
+    dismissEmergencyAlert,
+    toasts,
+    dismissToast,
+    resetFsmToIdle,
+  } = useCommunicator();
 
   const tabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
     { id: 'COMMUNICATE', label: 'Communicate', icon: <Radio className="w-5 h-5" /> },
@@ -40,14 +50,19 @@ const MainLayout: React.FC = () => {
         onDismiss={dismissEmergencyAlert}
       />
 
-      {/* Primary Scrollable Content Area */}
+      {/* Primary Scrollable Content Area with Error Boundary Containment */}
       <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-4 py-3 sm:py-4 pb-28 sm:pb-20">
-        {activeTab === 'COMMUNICATE' && <CommunicationScreen />}
-        {activeTab === 'DEVICES' && <DevicesScreen />}
-        {activeTab === 'HISTORY' && <HistoryScreen />}
-        {activeTab === 'PERFORMANCE' && <PerformanceScreen />}
-        {activeTab === 'SETTINGS' && <SettingsScreen />}
+        <ErrorBoundary onReset={() => resetFsmToIdle('ErrorBoundary recovery')}>
+          {activeTab === 'COMMUNICATE' && <CommunicationScreen />}
+          {activeTab === 'DEVICES' && <DevicesScreen />}
+          {activeTab === 'HISTORY' && <HistoryScreen />}
+          {activeTab === 'PERFORMANCE' && <PerformanceScreen />}
+          {activeTab === 'SETTINGS' && <SettingsScreen />}
+        </ErrorBoundary>
       </main>
+
+      {/* Toast Notification Layer */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* Fixed Tactical Bottom Navigation Bar */}
       <nav

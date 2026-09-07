@@ -41,13 +41,31 @@ declare global {
   }
 }
 
+export interface SpeechQueueItem {
+  id: string;
+  text: string;
+  language: LanguageCode;
+  rate?: number;
+  volume?: number;
+  pitch?: number;
+  onStart?: () => void;
+  onEnd?: () => void;
+  onError?: (error: Error) => void;
+}
+
 export class SpeechEngine {
   private static recognition: IWindowSpeechRecognition | null = null;
   private static isListening: boolean = false;
   private static fallbackTimer: number | null = null;
 
+  // Non-blocking queue state for TTS
+  private static speechQueue: SpeechQueueItem[] = [];
+  private static isSpeakingActive: boolean = false;
+
   /**
-   * Start capturing speech using Web Speech API or streaming fallback
+   * Starts capturing speech input using Web Speech API or streaming fallback simulator.
+   *
+   * @param config - Configuration options including language, listeners, and continuous mode
    */
   static startListening({
     language,
@@ -149,7 +167,7 @@ export class SpeechEngine {
   }
 
   /**
-   * Stop speech recognition
+   * Stops active speech recognition and clears fallback polling timers.
    */
   static stopListening(): void {
     if (SpeechEngine.fallbackTimer) {
@@ -168,7 +186,11 @@ export class SpeechEngine {
   }
 
   /**
-   * Local Speech Synthesis (TTS)
+   * Non-blocking queued Local Speech Synthesis (TTS).
+   * If speech synthesis is currently active, requests are placed in an in-memory FIFO queue
+   * rather than canceling or overwriting the active playback.
+   *
+   * @param request - Speech request details including text, language, callbacks, and vocal parameters
    */
   static speak({
     text,
@@ -178,6 +200,7 @@ export class SpeechEngine {
     pitch = 1.0,
     onStart,
     onEnd,
+    onError,
   }: {
     text: string;
     language: LanguageCode;
@@ -186,27 +209,55 @@ export class SpeechEngine {
     pitch?: number;
     onStart?: () => void;
     onEnd?: () => void;
+    onError?: (error: Error) => void;
   }): void {
+    const item: SpeechQueueItem = {
+      id: `tts_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      text,
+      language,
+      rate,
+      volume,
+      pitch,
+      onStart,
+      onEnd,
+      onError,
+    };
+
+    // If currently speaking, queue without canceling
+    if (SpeechEngine.isSpeakingActive) {
+      SpeechEngine.speechQueue.push(item);
+      return;
+    }
+
+    // Otherwise, immediately execute this item
+    SpeechEngine.executeSpeechItem(item);
+  }
+
+  /**
+   * Internal runner that executes an individual queued speech utterance.
+   */
+  private static executeSpeechItem(item: SpeechQueueItem): void {
     if (!('speechSynthesis' in window)) {
-      if (onStart) onStart();
+      if (item.onStart) item.onStart();
       setTimeout(() => {
-        if (onEnd) onEnd();
+        if (item.onEnd) item.onEnd();
+        SpeechEngine.processNextInQueue();
       }, 800);
       return;
     }
 
+    SpeechEngine.isSpeakingActive = true;
+
     try {
-      window.speechSynthesis.cancel(); // Stop any pending speech
+      const utterance = new SpeechSynthesisUtterance(item.text);
+      utterance.lang = LANGUAGES[item.language]?.locale || 'hi-IN';
+      utterance.rate = Math.max(0.5, Math.min(2.0, item.rate ?? 1.0));
+      utterance.volume = Math.max(0, Math.min(1.0, item.volume ?? 1.0));
+      utterance.pitch = Math.max(0.5, Math.min(1.5, item.pitch ?? 1.0));
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = LANGUAGES[language]?.locale || 'hi-IN';
-      utterance.rate = Math.max(0.5, Math.min(2.0, rate));
-      utterance.volume = Math.max(0, Math.min(1.0, volume));
-      utterance.pitch = Math.max(0.5, Math.min(1.5, pitch));
-
-      // Attempt matching optimal Indian accent voice if available
+      // Match optimal localized voice
       const voices = window.speechSynthesis.getVoices();
-      const langPrefix = LANGUAGES[language]?.code || 'hi';
+      const langPrefix = LANGUAGES[item.language]?.code || 'hi';
       const matchedVoice = voices.find(
         (v) => v.lang.toLowerCase().startsWith(langPrefix) || v.lang.toLowerCase().includes('in')
       );
@@ -214,25 +265,82 @@ export class SpeechEngine {
         utterance.voice = matchedVoice;
       }
 
-      if (onStart) utterance.onstart = () => onStart();
-      if (onEnd) utterance.onend = () => onEnd();
-      utterance.onerror = () => {
-        if (onEnd) onEnd();
+      utterance.onstart = () => {
+        if (item.onStart) item.onStart();
+      };
+
+      const finishUtterance = () => {
+        SpeechEngine.isSpeakingActive = false;
+        if (item.onEnd) item.onEnd();
+        SpeechEngine.processNextInQueue();
+      };
+
+      utterance.onend = finishUtterance;
+      utterance.onerror = (e) => {
+        console.warn('Speech synthesis error event:', e);
+        if (item.onError) item.onError(new Error(e.error || 'TTS synthesis failed'));
+        finishUtterance();
       };
 
       window.speechSynthesis.speak(utterance);
-    } catch {
-      if (onEnd) onEnd();
+    } catch (err) {
+      console.warn('SpeechSynthesis execution exception:', err);
+      SpeechEngine.isSpeakingActive = false;
+      if (item.onError && err instanceof Error) item.onError(err);
+      if (item.onEnd) item.onEnd();
+      SpeechEngine.processNextInQueue();
     }
   }
 
-  static stopSpeaking(): void {
+  /**
+   * Processes the next pending item in the FIFO queue.
+   */
+  private static processNextInQueue(): void {
+    if (SpeechEngine.speechQueue.length > 0) {
+      const nextItem = SpeechEngine.speechQueue.shift();
+      if (nextItem) {
+        SpeechEngine.executeSpeechItem(nextItem);
+      }
+    } else {
+      SpeechEngine.isSpeakingActive = false;
+    }
+  }
+
+  /**
+   * Returns current count of queued utterances awaiting synthesis.
+   */
+  static getQueueLength(): number {
+    return SpeechEngine.speechQueue.length;
+  }
+
+  /**
+   * Clears all pending speech synthesis items in the queue without interrupting active speech.
+   */
+  static clearQueue(): void {
+    SpeechEngine.speechQueue = [];
+  }
+
+  /**
+   * Stops active speech playback and optionally flushes the queue.
+   *
+   * @param clearQueue - Whether to discard all queued utterances (default: true)
+   */
+  static stopSpeaking(clearQueue = true): void {
+    if (clearQueue) {
+      SpeechEngine.speechQueue = [];
+    }
+    SpeechEngine.isSpeakingActive = false;
+
     if ('speechSynthesis' in window) {
       try {
         window.speechSynthesis.cancel();
       } catch {
-        // Ignore
+        // Ignore cancel errors
       }
+    }
+
+    if (!clearQueue && SpeechEngine.speechQueue.length > 0) {
+      SpeechEngine.processNextInQueue();
     }
   }
 }
