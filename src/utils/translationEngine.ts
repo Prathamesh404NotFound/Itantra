@@ -16,7 +16,7 @@ export interface LanguageDetectionResult {
 }
 
 export class OfflineTranslationEngine {
-  private static readonly PHRASE_CLUSTERS: Record<string, Partial<Record<LanguageCode, string>>> = {
+  public static readonly PHRASE_CLUSTERS: Record<string, Partial<Record<LanguageCode, string>>> = {
     NEED_HELP: {
       mr: 'मला मदत हवी आहे.',
       hi: 'मुझे मदद चाहिए।',
@@ -24,7 +24,7 @@ export class OfflineTranslationEngine {
       ta: 'எனக்கு உதவி தேவை.',
       te: 'నాకు సహాయం కావాలి.',
       kn: 'ನನಗೆ ಸಹಾಯ ಬೇಕು.',
-      ml: 'എനിക്ക് സഹായം ആവശ്യമാണ്.',
+      ml: 'എനിക്ക് സഹಾಯം ആവശ്യമാണ്.',
       bn: 'আমার সাহায্য প্রয়োজন।',
       or: 'ମୋତେ ସାହାଯ୍ୟ ଦରକାର।',
       en: 'I need help.',
@@ -36,7 +36,7 @@ export class OfflineTranslationEngine {
       ta: 'தீ விபத்து ஏற்பட்டது, உடனடி உதவி தேவை!',
       te: 'మంటలు చెలరేగాయి, తక్షణ సహాయం పంపండి!',
       kn: 'ಬೆಂಕಿ ಅವಘಡ ಸಂಭವಿಸಿದೆ, ತಕ್ಷಣ ಸಹಾಯ ಕಳುಹಿಸಿ!',
-      ml: 'തീപിടുത്തം ഉണ്ടായി, ഉടൻ സഹായം അയക്കുക!',
+      ml: 'തീപിടുത്തം ഉണ്ടായി, ഉടൻ സഹಾಯം അയക്കുക!',
       bn: 'আগুন লেগেছে, অবিলম্বে সাহায্য পাঠান!',
       or: 'ନିଆଁ ଲାଗିଛି, ତୁରନ୍ତ ସାହାଯ୍ୟ ପଠାନ୍ତୁ!',
       en: 'Fire detected, send immediate assistance!',
@@ -48,7 +48,7 @@ export class OfflineTranslationEngine {
       ta: 'மருத்துவ அவசரநிலை, ஆம்புலன்ஸ் தேவைப்படுகிறது.',
       te: 'వైద్య అత్యవసర పరిస్థితి, వెంటనే అంబులెన్స్ కావాలి.',
       kn: 'ವೈದ್ಯಕೀಯ ತುರ್ತು ಪರಿಸ್ಥಿತಿ, ಅಂಬ್ಯುಲೆನ್ಸ್ ತಕ್ಷಣ ಬೇಕಾಗಿದೆ.',
-      ml: 'വൈദ്യസഹായം അടിയന്തിരമായി ആവശ്യമുണ്ട്, ആംബുലൻസ് വേണം.',
+      ml: 'വൈദ്യസഹായം അടിയന്തിരമായി ആവശ്യമുണ്ട്, ആംಬುലൻസ് വേണം.',
       bn: 'জরুরি চিকিৎসা প্রয়োজন, অবিলম্বে অ্যাম্বুলেন্স পাঠান।',
       or: 'ଡାକ୍ତରୀ ଜରୁରୀକାଳୀନ ପରିସ୍ଥିତି, ଆମ୍ବୁଲାନ୍ସ ଆବଶ୍ୟକ।',
       en: 'Medical emergency, immediate doctor or ambulance needed.',
@@ -128,7 +128,7 @@ export class OfflineTranslationEngine {
   };
 
   /**
-   * Fast on-device Indic translation
+   * Fast synchronous on-device Indic translation
    */
   static translate(
     text: string,
@@ -179,6 +179,64 @@ export class OfflineTranslationEngine {
       isDirectTranslation: false,
       latencyMs: Math.max(4, Math.round(performance.now() - start)),
     };
+  }
+
+  /**
+   * Async translation with optional server-side Gemini API fallback
+   */
+  static async translateText(
+    text: string,
+    sourceLanguage: LanguageCode,
+    targetLanguage: LanguageCode
+  ): Promise<TranslationResult> {
+    const start = performance.now();
+
+    if (sourceLanguage === targetLanguage) {
+      return {
+        originalText: text,
+        translatedText: text,
+        sourceLanguage,
+        targetLanguage,
+        isDirectTranslation: true,
+        latencyMs: 1,
+      };
+    }
+
+    const localResult = OfflineTranslationEngine.translate(text, sourceLanguage, targetLanguage);
+    if (localResult.isDirectTranslation) {
+      return localResult;
+    }
+
+    // Try cloud Gemini translation if local match was only a loose lexical fallback
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          sourceLang: sourceLanguage,
+          targetLang: targetLanguage,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.translatedText && typeof data.translatedText === 'string') {
+          return {
+            originalText: text,
+            translatedText: data.translatedText,
+            sourceLanguage,
+            targetLanguage,
+            isDirectTranslation: true,
+            latencyMs: Math.round(performance.now() - start),
+          };
+        }
+      }
+    } catch {
+      // Server unreachable or offline — use local fallback
+    }
+
+    return localResult;
   }
 
   private static fallbackTranslate(text: string, from: LanguageCode, to: LanguageCode): string {

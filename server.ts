@@ -23,6 +23,13 @@ function getGemini(): GoogleGenAI | null {
   return geminiClient;
 }
 
+function normalizeIp(ip: string | undefined): string {
+  if (!ip) return '127.0.0.1';
+  if (ip === '::1' || ip === '::ffff:127.0.0.1') return '127.0.0.1';
+  if (ip.startsWith('::ffff:')) return ip.replace('::ffff:', '');
+  return ip;
+}
+
 // In-memory peer registry for local mesh nodes
 interface MeshNode {
   deviceId: string;
@@ -133,12 +140,14 @@ app.post('/api/mesh/announce', (req: Request, res: Response) => {
     return;
   }
 
+  const clientIp = normalizeIp(ipAddress || (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip);
+
   const node: MeshNode = {
     deviceId,
     deviceName,
     transportType: transportType || 'WIFI_DIRECT',
     supportedLanguages: Array.isArray(supportedLanguages) ? supportedLanguages : ['hi', 'en'],
-    ipAddress: ipAddress || req.ip || '127.0.0.1',
+    ipAddress: clientIp,
     port: Number(port) || 8888,
     lastSeen: Date.now(),
   };

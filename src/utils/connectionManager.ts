@@ -1,7 +1,9 @@
 /**
  * Production-grade peer-to-peer connection manager for the iTantra disaster communication mesh.
- * Provides resilient link establishment, handshake negotiation, keepalive heartbeats (Ping/Pong),
- * round-trip latency tracking, exponential backoff reconnection, and clean lifecycle teardown.
+ * Provides resilient link establishment via WebRTC DataChannel (with STUN fallback),
+ * same-browser fallback via BroadcastChannel, signaling polling/announcements,
+ * keepalive heartbeats (Ping/Pong), round-trip latency tracking, exponential backoff reconnection,
+ * and clean lifecycle teardown.
  */
 
 import { ConnectionStatus, DeviceInfo, TransportType, VoicePacket } from '../types';
@@ -25,6 +27,7 @@ export type ConnectionStatusListener = (
 
 export type PacketReceivedListener = (packet: VoicePacket) => void;
 export type MetricsUpdateListener = (peerId: string, metrics: ConnectionMetrics) => void;
+export type DiscoveredNodesListener = (nodes: DeviceInfo[]) => void;
 
 interface HandshakePayload {
   type: 'HANDSHAKE_SYN' | 'HANDSHAKE_ACK';
@@ -62,12 +65,26 @@ interface DataPayload {
   encodedPacketBytes: number[];
 }
 
+interface WebrtcSignalPayload {
+  type: 'WEBRTC_SIGNAL';
+  senderDeviceId: string;
+  signalType: 'offer' | 'answer' | 'candidate';
+  data: unknown;
+}
+
 type MeshWireMessage =
   | HandshakePayload
   | PingPayload
   | PongPayload
   | DisconnectPayload
-  | DataPayload;
+  | DataPayload
+  | WebrtcSignalPayload;
+
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+];
 
 export class ProductionConnectionManager {
   private static instance: ProductionConnectionManager | null = null;
@@ -83,7 +100,7 @@ export class ProductionConnectionManager {
   // Heartbeat & Watchdog
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private missedHeartbeats: number = 0;
-  private readonly MAX_MISSED_HEARTBEATS = 3;
+  private readonly MAX_MISSED_HEARTBEATS = 4;
   private readonly HEARTBEAT_INTERVAL_MS = 5000;
 
   // Reconnection Logic
@@ -108,6 +125,10 @@ export class ProductionConnectionManager {
   private statusListeners: Set<ConnectionStatusListener> = new Set();
   private packetListeners: Set<PacketReceivedListener> = new Set();
   private metricsListeners: Set<MetricsUpdateListener> = new Set();
+  private discoveredNodesListeners: Set<DiscoveredNodesListener> = new Set();
+
+  // Deduplication cache for incoming messages
+  private receivedMessageIds = new Set<string>();
 
   public static getInstance(): ProductionConnectionManager {
     if (!ProductionConnectionManager.instance) {
@@ -118,10 +139,97 @@ export class ProductionConnectionManager {
 
   private constructor() {
     this.initTransport();
+    this.startSignalingPolling();
   }
 
   /**
-   * Initializes local mesh communication transport.
+   * Periodically announces local node identity to the backend gateway
+   * and polls for incoming WebRTC signaling messages and active peers.
+   */
+  private startSignalingPolling(): void {
+    if (typeof window === 'undefined') return;
+
+    // Periodic announcement every 6 seconds
+    setInterval(async () => {
+      if (!this.localDevice) return;
+      try {
+        await fetch('/api/mesh/announce', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deviceId: this.localDevice.deviceId,
+            deviceName: this.localDevice.deviceName,
+            transportType: this.localDevice.transportType,
+            supportedLanguages: this.localDevice.supportedLanguages,
+            ipAddress: this.localDevice.ipAddress,
+            port: this.localDevice.port,
+          }),
+        });
+      } catch {
+        // Local air-gapped mode - silent ignore
+      }
+    }, 6000);
+
+    // Poll for discovery and signaling messages every 2 seconds
+    setInterval(async () => {
+      if (!this.localDevice) return;
+
+      // 1. Fetch active mesh nodes
+      try {
+        const nodesRes = await fetch(`/api/mesh/nodes?exclude=${encodeURIComponent(this.localDevice.deviceId)}`);
+        if (nodesRes.ok) {
+          const data = await nodesRes.json();
+          if (data.nodes && Array.isArray(data.nodes)) {
+            const mappedNodes: DeviceInfo[] = data.nodes.map((n: {
+              deviceId: string;
+              deviceName: string;
+              transportType: string;
+              supportedLanguages: string[];
+              ipAddress: string;
+              port: number;
+              lastSeen: number;
+            }) => ({
+              deviceId: n.deviceId,
+              deviceName: n.deviceName,
+              transportType: (n.transportType as TransportType) || 'WIFI_DIRECT',
+              supportedLanguages: n.supportedLanguages || ['hi', 'en'],
+              isConnected: this.activePeer?.deviceId === n.deviceId && this.connectionStatus === 'CONNECTED',
+              connectionStatus: this.activePeer?.deviceId === n.deviceId ? this.connectionStatus : 'DISCONNECTED',
+              signalDbm: -50,
+              ipAddress: n.ipAddress || '127.0.0.1',
+              port: n.port || 8888,
+              lastSeen: n.lastSeen,
+              latencyMs: this.activePeer?.deviceId === n.deviceId ? this.metrics.roundTripLatencyMs : 12,
+            }));
+
+            this.discoveredNodesListeners.forEach((listener) => listener(mappedNodes));
+          }
+        }
+      } catch {
+        // Silent ignore in offline/airgapped
+      }
+
+      // 2. Poll for mailbox signals
+      try {
+        const res = await fetch(`/api/mesh/signal/${this.localDevice.deviceId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.messages && Array.isArray(data.messages)) {
+            for (const m of data.messages) {
+              if (m.signal) {
+                this.processIncomingPayload(m.signal as MeshWireMessage);
+              }
+            }
+          }
+        }
+      } catch {
+        // Silent ignore
+      }
+    }, 2000);
+  }
+
+  /**
+   * Initializes local mesh communication transport (BroadcastChannel).
    */
   private initTransport(): void {
     try {
@@ -129,7 +237,7 @@ export class ProductionConnectionManager {
         this.broadcastChannel = new BroadcastChannel('itantra_mesh_channel');
         this.broadcastChannel.onmessage = this.handleIncomingMessage.bind(this);
         this.broadcastChannel.onmessageerror = (err) => {
-          console.error('[ConnectionManager] BroadcastChannel deserialization error:', err);
+          console.error('[ConnectionManager] BroadcastChannel error:', err);
         };
       }
     } catch (err) {
@@ -168,8 +276,13 @@ export class ProductionConnectionManager {
     return () => this.metricsListeners.delete(listener);
   }
 
+  public subscribeDiscoveredNodes(listener: DiscoveredNodesListener): () => void {
+    this.discoveredNodesListeners.add(listener);
+    return () => this.discoveredNodesListeners.delete(listener);
+  }
+
   /**
-   * Initiates a deterministic connection handshake to a target peer device.
+   * Initiates link establishment to a target peer device with WebRTC offer and Broadcast fallback.
    */
   public async connect(targetPeer: DeviceInfo): Promise<boolean> {
     if (this.connectionStatus === 'CONNECTING') {
@@ -181,7 +294,7 @@ export class ProductionConnectionManager {
     this.updateStatus('CONNECTING', `Initiating link to ${targetPeer.deviceName}`);
 
     try {
-      // Send Handshake SYN frame
+      // 1. Send Handshake SYN frame across BroadcastChannel and Signaling
       const synMessage: HandshakePayload = {
         type: 'HANDSHAKE_SYN',
         senderDeviceId: this.localDevice?.deviceId || 'local_node',
@@ -190,16 +303,17 @@ export class ProductionConnectionManager {
         protocolVersion: 'itantra_v1',
         timestamp: Date.now(),
       };
-
       this.rawSend(synMessage);
 
-      // In browser simulation, establish connection upon positive acknowledgment
-      // For single-window or simulated targets, establish connection after verification
+      // 2. Setup WebRTC PeerConnection and create Offer
+      this.setupWebRTCOffer(targetPeer.deviceId);
+
+      // 3. Fallback timer for single-browser or quick link acknowledgment
       setTimeout(() => {
         if (this.connectionStatus === 'CONNECTING' && this.activePeer?.deviceId === targetPeer.deviceId) {
           this.onConnectionEstablished(targetPeer);
         }
-      }, 350);
+      }, 600);
 
       return true;
     } catch (err) {
@@ -207,6 +321,146 @@ export class ProductionConnectionManager {
       this.handleConnectionFailure(errorMsg);
       return false;
     }
+  }
+
+  /**
+   * Initializes RTCPeerConnection and creates a DataChannel & Offer.
+   */
+  private async setupWebRTCOffer(targetPeerId: string): Promise<void> {
+    if (typeof RTCPeerConnection === 'undefined') return;
+
+    try {
+      if (this.rtcPeer) {
+        this.rtcPeer.close();
+      }
+
+      this.rtcPeer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+      this.rtcDataChannel = this.rtcPeer.createDataChannel('itantra_mesh', {
+        ordered: true,
+      });
+
+      this.setupDataChannelEvents(this.rtcDataChannel);
+
+      this.rtcPeer.onicecandidate = (event) => {
+        if (event.candidate) {
+          this.sendSignalingMessage({
+            type: 'WEBRTC_SIGNAL',
+            senderDeviceId: this.localDevice?.deviceId || 'local_node',
+            signalType: 'candidate',
+            data: event.candidate,
+          }, targetPeerId);
+        }
+      };
+
+      const offer = await this.rtcPeer.createOffer();
+      await this.rtcPeer.setLocalDescription(offer);
+
+      this.sendSignalingMessage({
+        type: 'WEBRTC_SIGNAL',
+        senderDeviceId: this.localDevice?.deviceId || 'local_node',
+        signalType: 'offer',
+        data: offer,
+      }, targetPeerId);
+    } catch (err) {
+      console.warn('[ConnectionManager] WebRTC offer creation failed:', err);
+    }
+  }
+
+  /**
+   * Handles incoming WebRTC answer or candidate.
+   */
+  private async handleWebRTCSignal(signal: WebrtcSignalPayload): Promise<void> {
+    if (typeof RTCPeerConnection === 'undefined') return;
+
+    try {
+      if (signal.signalType === 'offer') {
+        // Someone is connecting to us
+        if (this.rtcPeer) {
+          this.rtcPeer.close();
+        }
+
+        this.rtcPeer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+        this.rtcPeer.ondatachannel = (event) => {
+          this.rtcDataChannel = event.channel;
+          this.setupDataChannelEvents(event.channel);
+        };
+
+        this.rtcPeer.onicecandidate = (event) => {
+          if (event.candidate) {
+            this.sendSignalingMessage({
+              type: 'WEBRTC_SIGNAL',
+              senderDeviceId: this.localDevice?.deviceId || 'local_node',
+              signalType: 'candidate',
+              data: event.candidate,
+            }, signal.senderDeviceId);
+          }
+        };
+
+        await this.rtcPeer.setRemoteDescription(new RTCSessionDescription(signal.data as RTCSessionDescriptionInit));
+        const answer = await this.rtcPeer.createAnswer();
+        await this.rtcPeer.setLocalDescription(answer);
+
+        this.sendSignalingMessage({
+          type: 'WEBRTC_SIGNAL',
+          senderDeviceId: this.localDevice?.deviceId || 'local_node',
+          signalType: 'answer',
+          data: answer,
+        }, signal.senderDeviceId);
+      } else if (signal.signalType === 'answer') {
+        if (this.rtcPeer) {
+          await this.rtcPeer.setRemoteDescription(new RTCSessionDescription(signal.data as RTCSessionDescriptionInit));
+        }
+      } else if (signal.signalType === 'candidate') {
+        if (this.rtcPeer && signal.data) {
+          await this.rtcPeer.addIceCandidate(new RTCIceCandidate(signal.data as RTCIceCandidateInit));
+        }
+      }
+    } catch (err) {
+      console.warn('[ConnectionManager] WebRTC signal processing error:', err);
+    }
+  }
+
+  private setupDataChannelEvents(dc: RTCDataChannel): void {
+    dc.onopen = () => {
+      console.log('[ConnectionManager] WebRTC DataChannel OPENED!');
+      if (this.activePeer) {
+        this.onConnectionEstablished(this.activePeer);
+      }
+    };
+
+    dc.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        this.processIncomingPayload(msg);
+      } catch (err) {
+        console.error('[ConnectionManager] Failed to parse DataChannel frame:', err);
+      }
+    };
+
+    dc.onclose = () => {
+      console.log('[ConnectionManager] WebRTC DataChannel closed');
+    };
+
+    dc.onerror = (err) => {
+      console.warn('[ConnectionManager] WebRTC DataChannel error:', err);
+    };
+  }
+
+  private sendSignalingMessage(msg: WebrtcSignalPayload, targetPeerId: string): void {
+    if (!this.localDevice) return;
+    fetch('/api/mesh/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fromPeerId: this.localDevice.deviceId,
+        toPeerId: targetPeerId,
+        signalData: msg,
+      }),
+    }).catch(() => {
+      // offline fallback
+    });
   }
 
   /**
@@ -227,7 +481,6 @@ export class ProductionConnectionManager {
     }
 
     this.clearTimers();
-    const prevPeerId = this.activePeer?.deviceId || 'peer';
     this.activePeer = null;
     this.reconnectAttempts = 0;
     this.updateStatus('DISCONNECTED', reason);
@@ -350,9 +603,19 @@ export class ProductionConnectionManager {
   }
 
   /**
-   * Dispatches low-level message over the active transport layer.
+   * Dispatches low-level message over active transport layers.
    */
   private rawSend(msg: MeshWireMessage): void {
+    // 1. WebRTC DataChannel (Primary for cross-device)
+    if (this.rtcDataChannel && this.rtcDataChannel.readyState === 'open') {
+      try {
+        this.rtcDataChannel.send(JSON.stringify(msg));
+      } catch (err) {
+        console.error('[ConnectionManager] RTCDataChannel send failed:', err);
+      }
+    }
+
+    // 2. BroadcastChannel (For same-browser tabs)
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(msg);
@@ -361,20 +624,33 @@ export class ProductionConnectionManager {
       }
     }
 
-    if (this.rtcDataChannel && this.rtcDataChannel.readyState === 'open') {
-      try {
-        this.rtcDataChannel.send(JSON.stringify(msg));
-      } catch (err) {
-        console.error('[ConnectionManager] RTCDataChannel send failed:', err);
-      }
+    // 3. Signaling relay for LAN / Internet reachability
+    if (this.activePeer && this.localDevice) {
+      fetch('/api/mesh/signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromPeerId: this.localDevice.deviceId,
+          toPeerId: this.activePeer.deviceId,
+          signalData: msg,
+        }),
+      }).catch(() => {
+        // Air-gapped fallback
+      });
     }
   }
 
   /**
-   * Ingests and processes incoming transport frames.
+   * Ingests and processes incoming transport frames from any layer.
    */
   private handleIncomingMessage(event: MessageEvent): void {
     const data = event.data as MeshWireMessage;
+    if (data) {
+      this.processIncomingPayload(data);
+    }
+  }
+
+  public processIncomingPayload(data: MeshWireMessage): void {
     if (!data || !data.type) return;
 
     // Filter out our own loopback transmissions
@@ -383,6 +659,11 @@ export class ProductionConnectionManager {
     }
 
     switch (data.type) {
+      case 'WEBRTC_SIGNAL': {
+        this.handleWebRTCSignal(data);
+        break;
+      }
+
       case 'HANDSHAKE_SYN': {
         // Respond with HANDSHAKE_ACK
         const ackMsg: HandshakePayload = {
@@ -433,6 +714,16 @@ export class ProductionConnectionManager {
           const uint8 = new Uint8Array(data.encodedPacketBytes);
           const decoded = PacketCodec.decode(uint8);
           if (decoded) {
+            // Deduplicate if we received via multiple transports
+            if (this.receivedMessageIds.has(decoded.messageId)) {
+              return;
+            }
+            this.receivedMessageIds.add(decoded.messageId);
+            if (this.receivedMessageIds.size > 200) {
+              const oldest = Array.from(this.receivedMessageIds).slice(0, 50);
+              oldest.forEach((id) => this.receivedMessageIds.delete(id));
+            }
+
             this.metrics.packetsReceived += 1;
             this.metrics.bytesReceived += uint8.length;
             this.notifyMetrics();
@@ -489,6 +780,7 @@ export class ProductionConnectionManager {
     this.statusListeners.clear();
     this.packetListeners.clear();
     this.metricsListeners.clear();
+    this.discoveredNodesListeners.clear();
   }
 }
 

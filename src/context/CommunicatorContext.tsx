@@ -39,6 +39,7 @@ import { SpeechEngine } from '../utils/speechEngine';
 import { WerCalculator } from '../utils/werCalculator';
 import { SyncManager } from '../utils/syncManager';
 import { ConnectionManager } from '../utils/connectionManager';
+import { getOrCreateDeviceId, getOrCreateDeviceName } from '../utils/deviceIdentity';
 
 /**
  * FSM internal state structure managed by the reducer.
@@ -323,16 +324,20 @@ const INITIAL_SEEDED_MESSAGES: VoicePacket[] = [
 
 export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Local identity
-  const [localDevice] = useState<DeviceInfo>({
-    deviceId: 'unit_alpha_01',
-    deviceName: 'Field Radio 01 (Command Base)',
-    supportedLanguages: ['mr', 'hi', 'en', 'gu', 'ta'],
-    isConnected: true,
-    transportType: 'WIFI_DIRECT',
-    signalDbm: -42,
-    ipAddress: '192.168.49.1',
-    port: 8888,
-    lastSeen: Date.now(),
+  const [localDevice] = useState<DeviceInfo>(() => {
+    const id = getOrCreateDeviceId();
+    const name = getOrCreateDeviceName();
+    return {
+      deviceId: id,
+      deviceName: name,
+      supportedLanguages: ['mr', 'hi', 'en', 'gu', 'ta', 'te', 'kn', 'ml', 'bn', 'or'],
+      isConnected: true,
+      transportType: 'WIFI_DIRECT',
+      signalDbm: -42,
+      ipAddress: '127.0.0.1',
+      port: 8888,
+      lastSeen: Date.now(),
+    };
   });
 
   const [activeTab, setActiveTab] = useState<AppTab>('COMMUNICATE');
@@ -656,10 +661,25 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
       );
     });
 
+    const unsubNodes = ConnectionManager.subscribeDiscoveredNodes((nodes) => {
+      if (nodes && nodes.length > 0) {
+        setDiscoveredDevices((prev) => {
+          const merged = [...nodes];
+          for (const d of prev) {
+            if (!merged.some((n) => n.deviceId === d.deviceId)) {
+              merged.push(d);
+            }
+          }
+          return merged;
+        });
+      }
+    });
+
     return () => {
       unsubStatus();
       unsubPackets();
       unsubMetrics();
+      unsubNodes();
     };
   }, [localDevice]);
 
@@ -1163,18 +1183,62 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     });
   };
 
-  const refreshDiscovery = () => {
+  const refreshDiscovery = async () => {
     AudioSynthesizer.playChirp(true);
     fsmDispatch({
       type: 'SET_STATUS_BANNER',
       text: 'Scanning mesh network for nearby devices...',
     });
+    try {
+      const res = await fetch(`/api/mesh/nodes?exclude=${encodeURIComponent(localDevice.deviceId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.nodes && Array.isArray(data.nodes)) {
+          const fetchedNodes: DeviceInfo[] = data.nodes.map((n: {
+            deviceId: string;
+            deviceName: string;
+            transportType: string;
+            supportedLanguages: string[];
+            ipAddress: string;
+            port: number;
+            lastSeen: number;
+          }) => ({
+            deviceId: n.deviceId,
+            deviceName: n.deviceName,
+            transportType: (n.transportType as TransportType) || 'WIFI_DIRECT',
+            supportedLanguages: n.supportedLanguages || ['hi', 'en'],
+            isConnected: connectedDevice?.deviceId === n.deviceId,
+            connectionStatus: connectedDevice?.deviceId === n.deviceId ? 'CONNECTED' : 'DISCONNECTED',
+            signalDbm: -50,
+            ipAddress: n.ipAddress || '127.0.0.1',
+            port: n.port || 8888,
+            lastSeen: n.lastSeen,
+            latencyMs: 8,
+          }));
+
+          if (fetchedNodes.length > 0) {
+            setDiscoveredDevices((prev) => {
+              const merged = [...fetchedNodes];
+              for (const d of prev) {
+                if (!merged.some((m) => m.deviceId === d.deviceId)) {
+                  merged.push(d);
+                }
+              }
+              return merged;
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore network errors in local air-gap
+    }
+
     setTimeout(() => {
       fsmDispatch({
         type: 'SET_STATUS_BANNER',
         text: `Mesh scan complete. ${discoveredDevices.length} peers reachable.`,
       });
-    }, 800);
+    }, 600);
   };
 
   const setLowResourceModeHandler = (enabled: boolean) => {

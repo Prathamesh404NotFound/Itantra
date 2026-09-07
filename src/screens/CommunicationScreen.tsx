@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useCommunicator } from '../context/CommunicatorContext';
 import { LANGUAGES, LANGUAGE_LIST, LanguageCode } from '../types';
+import { OfflineTranslationEngine } from '../utils/translationEngine';
 import { TactilePttButton } from '../components/TactilePttButton';
 import { MessageCard } from '../components/MessageCard';
 import {
@@ -39,13 +40,16 @@ export const CommunicationScreen: React.FC = () => {
   const srcLang = LANGUAGES[sourceLanguage];
   const dstLang = LANGUAGES[targetLanguage];
 
-  const quickPhrases = [
-    { label: 'Location Safe', text: 'मी सुरक्षित ठिकाणी पोहोचलो आहे.' },
-    { label: 'Water Needed', text: 'आम्हाला पिण्याच्या पाण्याची तातडीने गरज आहे.' },
-    { label: 'Need Help', text: 'मला मदत हवी आहे.' },
-    { label: 'Evacuate Area', text: 'धोका आहे, परिसर ताबडतोब रिकामी करा!' },
-    { label: 'Stand By', text: 'पुढील सूचनांची वाट पाहत आहे.' },
-  ];
+  const quickPhrases = useMemo(() => {
+    const clusters = OfflineTranslationEngine.PHRASE_CLUSTERS;
+    return [
+      { label: 'Location Safe', text: clusters.LOCATION_SAFE?.[sourceLanguage] || 'Location is safe.' },
+      { label: 'Water Needed', text: clusters.WATER_SUPPLY?.[sourceLanguage] || 'Water needed.' },
+      { label: 'Need Help', text: clusters.NEED_HELP?.[sourceLanguage] || 'Need help.' },
+      { label: 'Evacuate Area', text: clusters.EVACUATE_AREA?.[sourceLanguage] || 'Evacuate area!' },
+      { label: 'Stand By', text: clusters.AWAITING_ORDERS?.[sourceLanguage] || 'Standing by.' },
+    ];
+  }, [sourceLanguage]);
 
   const filteredLanguages = LANGUAGE_LIST.filter((lang) => {
     if (!languageSearchQuery.trim()) return true;
