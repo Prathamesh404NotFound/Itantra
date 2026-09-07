@@ -139,6 +139,18 @@ export const TactilePttButton: React.FC = () => {
             e.preventDefault();
             if (!isError) onPttUp();
           }}
+          onTouchCancel={(e) => {
+            e.preventDefault();
+            if (!isError) onPttUp();
+          }}
+          aria-label={
+            isCapturing
+              ? 'Release to transmit voice packet'
+              : isError
+              ? 'Reset audio engine'
+              : 'Hold to speak push-to-talk'
+          }
+          aria-pressed={isCapturing}
           className={`relative z-10 w-28 h-28 sm:w-32 sm:h-32 rounded-full flex flex-col items-center justify-center text-white transition-all shadow-lg active:scale-95 touch-none ${
             isCapturing
               ? 'bg-[#A83F20] shadow-[#C7512E]/40 ring-4 ring-[#FCEEE8]'

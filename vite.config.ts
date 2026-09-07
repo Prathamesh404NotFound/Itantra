@@ -41,6 +41,26 @@ export default defineConfig(() => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           navigateFallback: '/index.html',
+          runtimeCaching: [
+            {
+              urlPattern: ({ request }) => request.destination === 'font' || request.destination === 'audio',
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'static-media-cache',
+                expiration: {
+                  maxEntries: 64,
+                  maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+                },
+              },
+            },
+            {
+              urlPattern: ({ request }) => request.destination === 'document' || request.destination === 'script',
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'app-shell-cache',
+              },
+            },
+          ],
         },
         devOptions: {
           enabled: false,

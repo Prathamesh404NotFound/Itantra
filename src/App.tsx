@@ -51,7 +51,7 @@ const MainLayout: React.FC = () => {
       />
 
       {/* Primary Scrollable Content Area with Error Boundary Containment */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-4 py-3 sm:py-4 pb-28 sm:pb-20">
+      <main className="flex-1 max-w-4xl lg:max-w-6xl w-full mx-auto px-3 sm:px-4 lg:px-6 py-3 sm:py-4 pb-28 sm:pb-24">
         <ErrorBoundary onReset={() => resetFsmToIdle('ErrorBoundary recovery')}>
           {activeTab === 'COMMUNICATE' && <CommunicationScreen />}
           {activeTab === 'DEVICES' && <DevicesScreen />}
@@ -64,14 +64,14 @@ const MainLayout: React.FC = () => {
       {/* Toast Notification Layer */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Fixed Tactical Bottom Navigation Bar */}
+      {/* Fixed Tactical Navigation: Bottom docked on mobile, floating dock on tablet/desktop */}
       <nav
         id="app_bottom_nav"
         role="navigation"
         aria-label="Main Navigation"
-        className="fixed bottom-0 left-0 right-0 z-40 bg-[#FFFFFF]/95 backdrop-blur-md border-t border-[#E8E0D5] pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom,0px))] px-1 sm:px-3 shadow-lg"
+        className="fixed bottom-0 md:bottom-4 left-0 right-0 md:left-1/2 md:-translate-x-1/2 md:w-auto md:min-w-[420px] md:max-w-lg z-40 bg-[#FFFFFF]/95 backdrop-blur-md border-t md:border border-[#E8E0D5] md:rounded-2xl pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom,0px))] md:py-1.5 px-1 sm:px-3 md:px-4 shadow-lg md:shadow-xl transition-all"
       >
-        <div className="max-w-md mx-auto flex items-center justify-around">
+        <div className="max-w-md mx-auto flex items-center justify-around md:gap-2">
           {tabs.map((tab) => {
             const isActive = activeTab === tab.id;
             return (

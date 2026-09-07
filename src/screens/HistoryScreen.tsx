@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useCommunicator } from '../context/CommunicatorContext';
 import { MessageCard } from '../components/MessageCard';
 import {
@@ -7,8 +7,8 @@ import {
   AlertTriangle,
   FileDown,
   Layers,
-  HardDriveDownload,
-  Filter,
+  Check,
+  X,
 } from 'lucide-react';
 
 export const HistoryScreen: React.FC = () => {
@@ -21,6 +21,8 @@ export const HistoryScreen: React.FC = () => {
     historyFilterCriticalOnly,
     setHistoryFilterCritical,
   } = useCommunicator();
+
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const filteredMessages = useMemo(() => {
     return messages.filter((msg) => {
@@ -65,7 +67,7 @@ export const HistoryScreen: React.FC = () => {
               value={historySearchQuery}
               onChange={(e) => setHistorySearchQuery(e.target.value)}
               placeholder="Search by keywords, language..."
-              className="w-full pl-8 sm:pl-9 pr-3 py-2 min-h-[38px] rounded-xl bg-[#FAF7F2] border border-[#E8E0D5] text-xs sm:text-sm text-[#26211E] placeholder:text-[#9E948A] focus:outline-none focus:border-[#C7512E]"
+              className="w-full pl-8 sm:pl-9 pr-3 py-2 min-h-[44px] rounded-xl bg-[#FAF7F2] border border-[#E8E0D5] text-xs sm:text-sm text-[#26211E] placeholder:text-[#9E948A] focus:outline-none focus:border-[#C7512E]"
             />
           </div>
 
@@ -73,19 +75,44 @@ export const HistoryScreen: React.FC = () => {
             onClick={handleExportJson}
             title="Export Transmissions (JSON)"
             aria-label="Export transmissions as JSON"
-            className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-[#FAF7F2] hover:bg-[#F4ECE4] border border-[#E8E0D5] text-[#6B625B] hover:text-[#26211E] transition-colors shrink-0"
+            className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-[#FAF7F2] hover:bg-[#F4ECE4] border border-[#E8E0D5] text-[#6B625B] hover:text-[#26211E] transition-colors shrink-0"
           >
             <FileDown className="w-4 h-4" />
           </button>
 
-          <button
-            onClick={clearHistory}
-            title="Clear All History"
-            aria-label="Clear all transmission history"
-            className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-[#FAF7F2] hover:bg-[#FEE2E2] hover:text-[#B91C1C] border border-[#E8E0D5] text-[#6B625B] transition-colors shrink-0"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {confirmClear ? (
+            <div className="flex items-center gap-1 bg-[#FEE2E2] border border-[#EF4444] rounded-xl p-1 shrink-0">
+              <button
+                onClick={() => {
+                  clearHistory();
+                  setConfirmClear(false);
+                }}
+                title="Confirm Clear"
+                aria-label="Confirm clear all history"
+                className="px-2 py-1 min-h-[36px] flex items-center gap-1 rounded-lg bg-[#DC2626] text-white text-xs font-bold"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Clear</span>
+              </button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                title="Cancel"
+                aria-label="Cancel clear history"
+                className="p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#6B625B] hover:text-[#26211E]"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmClear(true)}
+              title="Clear All History"
+              aria-label="Clear all transmission history"
+              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-[#FAF7F2] hover:bg-[#FEE2E2] hover:text-[#B91C1C] border border-[#E8E0D5] text-[#6B625B] transition-colors shrink-0"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Filter Pills */}

@@ -224,16 +224,20 @@ export interface ToastNotification {
 
 export type TransportType = 'WIFI_DIRECT' | 'BLUETOOTH' | 'LOCAL_SOCKET' | 'SIMULATION';
 
+export type ConnectionStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'FAILED';
+
 export interface DeviceInfo {
   deviceId: string;
   deviceName: string;
   supportedLanguages: LanguageCode[];
   isConnected: boolean;
+  connectionStatus?: ConnectionStatus;
   transportType: TransportType;
   signalDbm: number;
   ipAddress: string;
   port: number;
   lastSeen: number;
+  latencyMs?: number;
 }
 
 export interface VoicePacket {

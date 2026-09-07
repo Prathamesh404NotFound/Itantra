@@ -147,7 +147,11 @@ export const DevicesScreen: React.FC = () => {
 
         <div className="space-y-2.5">
           {discoveredDevices.map((device) => {
-            const isConnected = connectedDevice?.deviceId === device.deviceId;
+            const status = device.connectionStatus || (device.isConnected ? 'CONNECTED' : 'DISCONNECTED');
+            const isConnected = status === 'CONNECTED';
+            const isConnecting = status === 'CONNECTING';
+            const isReconnecting = status === 'RECONNECTING';
+            const isFailed = status === 'FAILED';
 
             return (
               <div
@@ -155,6 +159,10 @@ export const DevicesScreen: React.FC = () => {
                 className={`p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                   isConnected
                     ? 'bg-[#FCEEE8]/50 border-[#C7512E]'
+                    : isFailed
+                    ? 'bg-[#FEF2F2] border-[#F87171]'
+                    : isConnecting || isReconnecting
+                    ? 'bg-[#FFFBEB] border-[#FBBF24]'
                     : 'bg-[#FAF7F2] border-[#E8E0D5] hover:border-[#9E948A]'
                 }`}
               >
@@ -163,6 +171,10 @@ export const DevicesScreen: React.FC = () => {
                     className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                       isConnected
                         ? 'bg-[#C7512E] text-white'
+                        : isFailed
+                        ? 'bg-[#EF4444] text-white'
+                        : isConnecting || isReconnecting
+                        ? 'bg-[#F59E0B] text-white'
                         : 'bg-[#FFFFFF] border border-[#E8E0D5] text-[#6B625B]'
                     }`}
                   >
@@ -174,8 +186,23 @@ export const DevicesScreen: React.FC = () => {
                         {device.deviceName}
                       </span>
                       {isConnected && (
-                        <span className="px-1.5 py-0.5 rounded-full bg-[#B45309] text-white text-[10px] font-bold">
+                        <span className="px-1.5 py-0.5 rounded-full bg-[#10B981] text-white text-[10px] font-bold">
                           ACTIVE PEER
+                        </span>
+                      )}
+                      {isConnecting && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-[#F59E0B] text-white text-[10px] font-bold animate-pulse">
+                          HANDSHAKING...
+                        </span>
+                      )}
+                      {isReconnecting && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-[#F59E0B] text-white text-[10px] font-bold animate-pulse">
+                          RECONNECTING...
+                        </span>
+                      )}
+                      {isFailed && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-[#EF4444] text-white text-[10px] font-bold">
+                          UNREACHABLE
                         </span>
                       )}
                     </div>
@@ -186,6 +213,14 @@ export const DevicesScreen: React.FC = () => {
                         <Signal className="w-3 h-3" />
                         {device.signalDbm} dBm
                       </span>
+                      {isConnected && (
+                        <>
+                          <span>•</span>
+                          <span className="font-mono text-[11px] text-[#059669] font-bold">
+                            {device.latencyMs || 8} ms RTT
+                          </span>
+                        </>
+                      )}
                     </div>
 
                     {/* Supported Language Badges */}
@@ -202,18 +237,33 @@ export const DevicesScreen: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="sm:self-center shrink-0 flex items-center gap-2">
+                <div className="sm:self-center shrink-0 flex items-center gap-2 w-full sm:w-auto">
                   {isConnected ? (
                     <button
                       onClick={disconnectDevice}
-                      className="w-full sm:w-auto px-3.5 py-1.5 rounded-xl bg-[#FFFFFF] border border-[#E8E0D5] hover:bg-[#FEE2E2] hover:text-[#B91C1C] text-xs font-bold text-[#6B625B] transition-colors"
+                      className="w-full sm:w-auto px-4 py-2 min-h-[44px] sm:min-h-[38px] rounded-xl bg-[#FFFFFF] border border-[#E8E0D5] hover:bg-[#FEE2E2] hover:text-[#B91C1C] text-xs font-bold text-[#6B625B] transition-colors flex items-center justify-center active:scale-95"
                     >
                       Disconnect
+                    </button>
+                  ) : isConnecting || isReconnecting ? (
+                    <button
+                      disabled
+                      className="w-full sm:w-auto px-4 py-2 min-h-[44px] sm:min-h-[38px] rounded-xl bg-[#F59E0B] text-white text-xs font-bold opacity-80 cursor-wait flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>{isConnecting ? 'Connecting...' : 'Reconnecting...'}</span>
+                    </button>
+                  ) : isFailed ? (
+                    <button
+                      onClick={() => connectToDevice(device)}
+                      className="w-full sm:w-auto px-4 py-2 min-h-[44px] sm:min-h-[38px] rounded-xl bg-[#EF4444] hover:bg-[#DC2626] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center active:scale-95"
+                    >
+                      Retry Link
                     </button>
                   ) : (
                     <button
                       onClick={() => connectToDevice(device)}
-                      className="w-full sm:w-auto px-3.5 py-1.5 rounded-xl bg-[#C7512E] hover:bg-[#A83F20] text-white text-xs font-bold transition-all shadow-xs"
+                      className="w-full sm:w-auto px-4 py-2 min-h-[44px] sm:min-h-[38px] rounded-xl bg-[#C7512E] hover:bg-[#A83F20] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center active:scale-95"
                     >
                       Connect
                     </button>

@@ -55,9 +55,26 @@ export function calculateCrc32(bytes: Uint8Array): number {
 /**
  * High-performance binary serializer and deserializer for VoicePacket structures
  * utilizing standard endianness and CRC32 verification.
+ *
+ * Binary Layout (28-byte canonical header + variable payloads + 4-byte CRC32):
+ * - [0..3]   Magic Header (0x54414E54 'TANT', 4B)
+ * - [4..7]   Sequence Number (Uint32, 4B)
+ * - [8..11]  Timestamp High 32-bit (Uint32, 4B)
+ * - [12..15] Timestamp Low 32-bit (Uint32, 4B)
+ * - [16]     Priority (Uint8, 1B: 1=CRITICAL, 0=NORMAL)
+ * - [17..18] Source Language Code (2B ASCII)
+ * - [19..20] Target Language Code (2B ASCII)
+ * - [21]     Reserved / Padding (1B)
+ * - [22..23] Text Payload Length in Bytes (Uint16, 2B)
+ * - [24..25] Translated Text Length in Bytes (Uint16, 2B)
+ * - [26..27] Flags (Uint16, 2B)
+ * - [28..]   UTF-8 Text Payload Bytes
+ * - [..]     UTF-8 Translated Text Bytes
+ * - [End-4]  CRC32 Checksum (Uint32, 4B)
  */
 export class PacketCodec {
-  private static readonly MAGIC_HEADER = 0x54414e54; // 'TANT'
+  public static readonly MAGIC_HEADER = 0x54414e54; // 'TANT'
+  public static readonly HEADER_SIZE = 28;
 
   /**
    * Encodes a VoicePacket into a compact binary representation with checksum.
@@ -67,42 +84,46 @@ export class PacketCodec {
    */
   static encode(packet: VoicePacket): Uint8Array {
     const encoder = new TextEncoder();
-    const payloadBytes = encoder.encode(packet.textPayload);
+    const payloadBytes = encoder.encode(packet.textPayload || '');
     const translatedBytes = packet.translatedText ? encoder.encode(packet.translatedText) : new Uint8Array(0);
 
-    // Header structure:
-    // Magic (4B) | Seq (4B) | Pri (1B) | SrcLang (2B) | DstLang (2B) | Time (8B) | PayloadLen (2B) | TransLen (2B)
-    const headerSize = 24;
-    const totalSize = headerSize + payloadBytes.length + translatedBytes.length + 4; // +4 for CRC32
+    const totalSize = PacketCodec.HEADER_SIZE + payloadBytes.length + translatedBytes.length + 4; // +4 for CRC32
     const buffer = new Uint8Array(totalSize);
     const view = new DataView(buffer.buffer);
 
+    // 1. Header fields
     view.setUint32(0, PacketCodec.MAGIC_HEADER, false);
     view.setUint32(4, packet.sequenceNumber, false);
-    view.setUint8(8, packet.priority === 'CRITICAL' ? 1 : 0);
-
-    // 2-byte language codes
-    buffer[9] = packet.sourceLanguage.charCodeAt(0);
-    buffer[10] = packet.sourceLanguage.charCodeAt(1);
-    buffer[11] = packet.targetLanguage.charCodeAt(0);
-    buffer[12] = packet.targetLanguage.charCodeAt(1);
 
     // Timestamp as high 4B and low 4B
     const highTime = Math.floor(packet.timestamp / 0x100000000);
     const lowTime = packet.timestamp >>> 0;
-    view.setUint32(13, highTime, false);
-    view.setUint32(17, lowTime, false);
+    view.setUint32(8, highTime, false);
+    view.setUint32(12, lowTime, false);
 
-    view.setUint16(21, payloadBytes.length, false);
-    view.setUint16(23, translatedBytes.length, false);
+    // Priority & Languages
+    view.setUint8(16, packet.priority === 'CRITICAL' ? 1 : 0);
+    const srcLang = packet.sourceLanguage || 'hi';
+    const dstLang = packet.targetLanguage || 'hi';
+    buffer[17] = srcLang.charCodeAt(0) || 104; // 'h'
+    buffer[18] = srcLang.charCodeAt(1) || 105; // 'i'
+    buffer[19] = dstLang.charCodeAt(0) || 104; // 'h'
+    buffer[20] = dstLang.charCodeAt(1) || 105; // 'i'
+    buffer[21] = 0; // Reserved padding
 
-    let offset = headerSize;
+    // Length prefixes
+    view.setUint16(22, payloadBytes.length, false);
+    view.setUint16(24, translatedBytes.length, false);
+    view.setUint16(26, 0, false); // Reserved flags
+
+    // 2. Variable payloads
+    let offset = PacketCodec.HEADER_SIZE;
     buffer.set(payloadBytes, offset);
     offset += payloadBytes.length;
     buffer.set(translatedBytes, offset);
     offset += translatedBytes.length;
 
-    // Compute CRC32 of everything up to offset
+    // 3. Compute and append CRC32
     const crc = calculateCrc32(buffer.subarray(0, offset));
     view.setUint32(offset, crc, false);
 
@@ -116,29 +137,39 @@ export class PacketCodec {
    * @returns Validated VoicePacket or null if corrupt, invalid magic, or failed CRC32
    */
   static decode(bytes: Uint8Array): VoicePacket | null {
-    if (bytes.length < 28) return null;
+    if (bytes.length < PacketCodec.HEADER_SIZE + 4) {
+      console.warn('[PacketCodec] Buffer length below minimum required size:', bytes.length);
+      return null;
+    }
+
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
     const magic = view.getUint32(0, false);
-    if (magic !== PacketCodec.MAGIC_HEADER) return null;
+    if (magic !== PacketCodec.MAGIC_HEADER) {
+      console.warn('[PacketCodec] Invalid magic header:', magic.toString(16));
+      return null;
+    }
 
     const seq = view.getUint32(4, false);
-    const isCritical = view.getUint8(8) === 1;
-    const srcLang = (String.fromCharCode(bytes[9], bytes[10]) as LanguageCode) || 'hi';
-    const dstLang = (String.fromCharCode(bytes[11], bytes[12]) as LanguageCode) || 'hi';
-
-    const highTime = view.getUint32(13, false);
-    const lowTime = view.getUint32(17, false);
+    const highTime = view.getUint32(8, false);
+    const lowTime = view.getUint32(12, false);
     const timestamp = highTime * 0x100000000 + lowTime;
 
-    const payloadLen = view.getUint16(21, false);
-    const transLen = view.getUint16(23, false);
+    const isCritical = view.getUint8(16) === 1;
+    const srcLang = (String.fromCharCode(bytes[17], bytes[18]) as LanguageCode) || 'hi';
+    const dstLang = (String.fromCharCode(bytes[19], bytes[20]) as LanguageCode) || 'hi';
 
-    const expectedTotal = 24 + payloadLen + transLen + 4;
-    if (bytes.length < expectedTotal) return null;
+    const payloadLen = view.getUint16(22, false);
+    const transLen = view.getUint16(24, false);
+
+    const expectedTotal = PacketCodec.HEADER_SIZE + payloadLen + transLen + 4;
+    if (bytes.length < expectedTotal) {
+      console.warn('[PacketCodec] Truncated buffer:', { actual: bytes.length, expectedTotal });
+      return null;
+    }
 
     const decoder = new TextDecoder();
-    let offset = 24;
+    let offset = PacketCodec.HEADER_SIZE;
     const payloadBytes = bytes.subarray(offset, offset + payloadLen);
     const textPayload = decoder.decode(payloadBytes);
     offset += payloadLen;
@@ -154,7 +185,7 @@ export class PacketCodec {
     const actualCrc = calculateCrc32(bytes.subarray(0, offset));
 
     if (recordedCrc !== actualCrc) {
-      console.warn('CRC32 checksum mismatch in VoicePacket');
+      console.warn('[PacketCodec] CRC32 checksum mismatch:', { recordedCrc, actualCrc });
       return null;
     }
 
@@ -175,7 +206,7 @@ export class PacketCodec {
       priority: (isCritical ? 'CRITICAL' : 'NORMAL') as Priority,
       timestamp,
       textPayload,
-      translatedText,
+      translatedText: translatedText || undefined,
       checksum: actualCrc,
       deliveryState: 'DELIVERED' as DeliveryState,
       audioSizeEstimateBytes,
@@ -187,7 +218,7 @@ export class PacketCodec {
     // Strict Zod schema verification
     const parseResult = VoicePacketSchema.safeParse(rawCandidate);
     if (!parseResult.success) {
-      console.error('PacketCodec schema validation failure:', parseResult.error.format());
+      console.error('[PacketCodec] Schema validation failure:', parseResult.error.format());
       return null;
     }
 

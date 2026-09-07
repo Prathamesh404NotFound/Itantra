@@ -38,6 +38,7 @@ import { OfflineTranslationEngine } from '../utils/translationEngine';
 import { SpeechEngine } from '../utils/speechEngine';
 import { WerCalculator } from '../utils/werCalculator';
 import { SyncManager } from '../utils/syncManager';
+import { ConnectionManager } from '../utils/connectionManager';
 
 /**
  * FSM internal state structure managed by the reducer.
@@ -360,33 +361,39 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
       deviceName: 'Field Radio 02 (Rescue Team)',
       supportedLanguages: ['mr', 'hi', 'en', 'gu'],
       isConnected: true,
+      connectionStatus: 'CONNECTED',
       transportType: 'WIFI_DIRECT',
       signalDbm: -45,
       ipAddress: '192.168.49.2',
       port: 8888,
       lastSeen: Date.now(),
+      latencyMs: 8,
     },
     {
       deviceId: 'unit_echo_07',
       deviceName: 'Medical Outpost Bravo',
       supportedLanguages: ['hi', 'ta', 'te', 'en'],
       isConnected: false,
+      connectionStatus: 'DISCONNECTED',
       transportType: 'WIFI_DIRECT',
       signalDbm: -68,
       ipAddress: '192.168.49.5',
       port: 8888,
       lastSeen: Date.now() - 4000,
+      latencyMs: 24,
     },
     {
       deviceId: 'unit_delta_04',
       deviceName: 'Forward Command Vehicle',
       supportedLanguages: ['mr', 'hi', 'kn', 'ml'],
       isConnected: false,
+      connectionStatus: 'DISCONNECTED',
       transportType: 'BLUETOOTH',
       signalDbm: -74,
       ipAddress: '192.168.49.9',
       port: 8888,
       lastSeen: Date.now() - 12000,
+      latencyMs: 42,
     },
   ]);
   const [connectedDevice, setConnectedDevice] = useState<DeviceInfo | null>(discoveredDevices[0]);
@@ -564,54 +571,95 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
   const pttStartTimeRef = useRef<number>(0);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
-  // Synchronize multi-tab / 2-phones simulation via BroadcastChannel
+  // Synchronize multi-tab / 2-phones simulation via ConnectionManager and BroadcastChannel
   useEffect(() => {
-    try {
-      const channel = new BroadcastChannel('itantra_mesh_channel');
-      broadcastChannelRef.current = channel;
+    ConnectionManager.setLocalDevice(localDevice);
 
-      channel.onmessage = (event) => {
-        if (event.data?.type === 'VOICE_PACKET') {
-          const packet: VoicePacket = event.data.packet;
-          if (packet.senderDeviceId !== localDevice.deviceId) {
-            setMessages((prev) => {
-              if (prev.some((m) => m.messageId === packet.messageId)) return prev;
-              return [packet, ...prev];
-            });
-
-            if (packet.priority === 'CRITICAL') {
-              setActiveEmergencyAlert(packet);
-              AudioSynthesizer.playEmergencySiren();
-            } else {
-              AudioSynthesizer.playChirp(false);
-            }
-
-            fsmDispatch({
-              type: 'TRANSITION_SYNTHESIZING',
-              reason: 'Received incoming mesh packet',
-              statusText: `Receiving packet from ${packet.senderDeviceId}...`,
-            });
-
-            playVoicePacket(packet);
-
-            setTimeout(() => {
-              fsmDispatch({
-                type: 'TRANSITION_IDLE',
-                reason: 'Packet playback complete',
-                statusText: `Received transmission (${packet.packetSizeBytes} Bytes) from ${packet.senderDeviceId}`,
-              });
-            }, 1200);
+    const unsubStatus = ConnectionManager.subscribeStatus((peerId, status, reason) => {
+      setDiscoveredDevices((prev) =>
+        prev.map((d) => {
+          if (d.deviceId === peerId) {
+            return {
+              ...d,
+              isConnected: status === 'CONNECTED',
+              connectionStatus: status,
+            };
           }
-        }
-      };
+          return d;
+        })
+      );
 
-      return () => {
-        channel.close();
-      };
-    } catch {
-      // BroadcastChannel unsupported in private context
-    }
-  }, [localDevice.deviceId]);
+      if (status === 'CONNECTED') {
+        setConnectedDevice((prev) => {
+          if (prev?.deviceId === peerId) {
+            return { ...prev, isConnected: true, connectionStatus: 'CONNECTED' };
+          }
+          return prev;
+        });
+        fsmDispatch({
+          type: 'SET_STATUS_BANNER',
+          text: `Mesh link established with ${peerId} (RTT: 8ms)`,
+        });
+      } else if (status === 'RECONNECTING') {
+        fsmDispatch({
+          type: 'SET_STATUS_BANNER',
+          text: reason || `Mesh connection degraded. Reconnecting to ${peerId}...`,
+        });
+      } else if (status === 'FAILED') {
+        fsmDispatch({
+          type: 'SET_STATUS_BANNER',
+          text: reason || `Mesh connection failed to ${peerId}.`,
+        });
+      }
+    });
+
+    const unsubPackets = ConnectionManager.subscribePackets((packet) => {
+      if (packet.senderDeviceId !== localDevice.deviceId) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.messageId === packet.messageId)) return prev;
+          return [packet, ...prev];
+        });
+
+        if (packet.priority === 'CRITICAL') {
+          setActiveEmergencyAlert(packet);
+          AudioSynthesizer.playEmergencySiren();
+        } else {
+          AudioSynthesizer.playChirp(false);
+        }
+
+        fsmDispatch({
+          type: 'TRANSITION_SYNTHESIZING',
+          reason: 'Received incoming mesh packet',
+          statusText: `Receiving packet from ${packet.senderDeviceId}...`,
+        });
+
+        playVoicePacket(packet);
+
+        setTimeout(() => {
+          fsmDispatch({
+            type: 'TRANSITION_IDLE',
+            reason: 'Packet playback complete',
+            statusText: `Received transmission (${packet.packetSizeBytes} Bytes) from ${packet.senderDeviceId}`,
+          });
+        }, 1200);
+      }
+    });
+
+    const unsubMetrics = ConnectionManager.subscribeMetrics((peerId, metrics) => {
+      setDiscoveredDevices((prev) =>
+        prev.map((d) => (d.deviceId === peerId ? { ...d, latencyMs: metrics.roundTripLatencyMs } : d))
+      );
+      setConnectedDevice((prev) =>
+        prev?.deviceId === peerId ? { ...prev, latencyMs: metrics.roundTripLatencyMs } : prev
+      );
+    });
+
+    return () => {
+      unsubStatus();
+      unsubPackets();
+      unsubMetrics();
+    };
+  }, [localDevice]);
 
   // Persist messages
   useEffect(() => {
@@ -870,6 +918,8 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     const finalizedPacket: VoicePacket = {
       ...decodedPacket,
       messageId: candidatePacket.messageId,
+      senderDeviceId: candidatePacket.senderDeviceId,
+      receiverDeviceId: candidatePacket.receiverDeviceId,
       deliveryState: 'DELIVERED',
       latencyMs: totalLatency,
       packetSizeBytes: encodedBytes.length,
@@ -912,7 +962,9 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
       totalDataTransmittedBytes: prev.totalDataTransmittedBytes + encodedBytes.length,
     }));
 
-    // Broadcast across tabs/devices if channel open
+    // Broadcast across mesh via ConnectionManager and BroadcastChannel
+    ConnectionManager.sendPacket(finalizedPacket);
+
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({
@@ -1038,26 +1090,41 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     });
   };
 
-  const connectToDevice = (device: DeviceInfo) => {
+  const connectToDevice = async (device: DeviceInfo) => {
+    AudioSynthesizer.playChirp(true);
     setDiscoveredDevices((prev) =>
       prev.map((d) => ({
         ...d,
         isConnected: d.deviceId === device.deviceId,
+        connectionStatus: d.deviceId === device.deviceId ? 'CONNECTING' : 'DISCONNECTED',
       }))
     );
-    setConnectedDevice({ ...device, isConnected: true });
-    AudioSynthesizer.playChirp(true);
+    setConnectedDevice({ ...device, isConnected: false, connectionStatus: 'CONNECTING' });
     fsmDispatch({
       type: 'SET_STATUS_BANNER',
-      text: `Connected to ${device.deviceName} via ${device.transportType}`,
+      text: `Connecting to ${device.deviceName} via ${device.transportType}...`,
     });
+
+    const success = await ConnectionManager.connect(device);
+    if (success) {
+      setConnectedDevice({ ...device, isConnected: true, connectionStatus: 'CONNECTED' });
+      setDiscoveredDevices((prev) =>
+        prev.map((d) => (d.deviceId === device.deviceId ? { ...d, isConnected: true, connectionStatus: 'CONNECTED' } : d))
+      );
+      fsmDispatch({
+        type: 'SET_STATUS_BANNER',
+        text: `Connected to ${device.deviceName} via ${device.transportType}`,
+      });
+    }
   };
 
   const disconnectDevice = () => {
+    ConnectionManager.disconnect('User requested disconnect');
     setDiscoveredDevices((prev) =>
       prev.map((d) => ({
         ...d,
         isConnected: false,
+        connectionStatus: 'DISCONNECTED',
       }))
     );
     setConnectedDevice(null);

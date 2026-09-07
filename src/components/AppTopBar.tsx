@@ -40,17 +40,44 @@ export const AppTopBar: React.FC = () => {
 
         {/* Status Indicators & SOS Action */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Connection status pill */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FFFFFF] border border-[#E8E0D5] text-xs font-semibold text-[#26211E] shadow-2xs">
+          {/* Mobile Connection status badge */}
+          <div
+            className="flex md:hidden items-center gap-1 px-2 py-1 rounded-full bg-[#FFFFFF] border border-[#E8E0D5] text-[11px] font-semibold text-[#26211E] shadow-2xs"
+            title={connectedDevice ? `Connected to ${connectedDevice.deviceName}` : 'Mesh Standby'}
+          >
+            {transportType === 'WIFI_DIRECT' ? (
+              <Wifi className="w-3 h-3 text-[#C7512E]" />
+            ) : (
+              <Bluetooth className="w-3 h-3 text-[#C7512E]" />
+            )}
+            <span className="truncate max-w-[68px]">
+              {connectedDevice ? connectedDevice.deviceName : 'Mesh'}
+            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                connectedDevice ? 'bg-[#16A34A]' : 'bg-[#B45309]'
+              }`}
+            ></span>
+          </div>
+
+          {/* Desktop & Tablet Connection status pill */}
+          <div
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FFFFFF] border border-[#E8E0D5] text-xs font-semibold text-[#26211E] shadow-2xs"
+            title={connectedDevice ? `Active Peer: ${connectedDevice.deviceName} (${transportType})` : 'Mesh Standby'}
+          >
             {transportType === 'WIFI_DIRECT' ? (
               <Wifi className="w-3.5 h-3.5 text-[#C7512E]" />
             ) : (
               <Bluetooth className="w-3.5 h-3.5 text-[#C7512E]" />
             )}
-            <span className="truncate max-w-[110px] sm:max-w-[130px]">
+            <span className="truncate max-w-[110px] sm:max-w-[140px]">
               {connectedDevice ? connectedDevice.deviceName : 'Mesh Ready'}
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#B45309]"></span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                connectedDevice ? 'bg-[#16A34A] animate-pulse' : 'bg-[#B45309]'
+              }`}
+            ></span>
           </div>
 
           {/* Zero Internet guarantee pill */}
