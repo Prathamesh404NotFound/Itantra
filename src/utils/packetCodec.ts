@@ -142,7 +142,8 @@ export class PacketCodec {
       return null;
     }
 
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const byteOffset = bytes.byteOffset || 0;
+    const view = new DataView(bytes.buffer, byteOffset, bytes.byteLength);
 
     const magic = view.getUint32(0, false);
     if (magic !== PacketCodec.MAGIC_HEADER) {
@@ -156,19 +157,25 @@ export class PacketCodec {
     const timestamp = highTime * 0x100000000 + lowTime;
 
     const isCritical = view.getUint8(16) === 1;
-    const srcLang = (String.fromCharCode(bytes[17], bytes[18]) as LanguageCode) || 'hi';
-    const dstLang = (String.fromCharCode(bytes[19], bytes[20]) as LanguageCode) || 'hi';
+    const validLanguages: LanguageCode[] = ['hi', 'gu', 'mr', 'kn', 'ml', 'ta', 'te', 'or', 'bn', 'en'];
+    const rawSrc = String.fromCharCode(bytes[17], bytes[18]) as LanguageCode;
+    const rawDst = String.fromCharCode(bytes[19], bytes[20]) as LanguageCode;
+    const srcLang = validLanguages.includes(rawSrc) ? rawSrc : 'hi';
+    const dstLang = validLanguages.includes(rawDst) ? rawDst : 'hi';
 
+    // 1 & 3. Endianness: Big-Endian (false) matches encode
     const payloadLen = view.getUint16(22, false);
     const transLen = view.getUint16(24, false);
 
+    // 2. Strict Integrity & Bounds Verification
     const expectedTotal = PacketCodec.HEADER_SIZE + payloadLen + transLen + 4;
     if (bytes.length < expectedTotal) {
-      console.warn('[PacketCodec] Truncated buffer:', { actual: bytes.length, expectedTotal });
-      return null;
+      const errorMsg = `[PacketCodec] Buffer underflow: declared payload (${payloadLen}B) + translation (${transLen}B) + header (${PacketCodec.HEADER_SIZE}B) + CRC (4B) = ${expectedTotal}B exceeds buffer length (${bytes.length}B)`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
     }
 
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
     let offset = PacketCodec.HEADER_SIZE;
     const payloadBytes = bytes.subarray(offset, offset + payloadLen);
     const textPayload = decoder.decode(payloadBytes);
@@ -181,11 +188,21 @@ export class PacketCodec {
       offset += transLen;
     }
 
+    // 4. Resilience and detailed CRC mismatch logging
     const recordedCrc = view.getUint32(offset, false);
     const actualCrc = calculateCrc32(bytes.subarray(0, offset));
 
     if (recordedCrc !== actualCrc) {
-      console.warn('[PacketCodec] CRC32 checksum mismatch:', { recordedCrc, actualCrc });
+      console.error('[PacketCodec] CRC32 Checksum Mismatch:', {
+        expectedCrc: recordedCrc,
+        actualCrc,
+        totalBufferSize: bytes.length,
+        headerSize: PacketCodec.HEADER_SIZE,
+        payloadLen,
+        transLen,
+        calculatedOffset: offset,
+        crcByteIndex: offset,
+      });
       return null;
     }
 
