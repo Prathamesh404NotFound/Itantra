@@ -113,26 +113,50 @@ export class SpeechEngine {
         };
 
         rec.onerror = (event: ISpeechRecognitionErrorEvent) => {
+          console.warn('[MIC] Native SpeechRecognition error:', event.error);
           if (event.error !== 'no-speech') {
             onError(`Speech error: ${event.error}`);
+          }
+          // If browser STT fails or lacks language support, switch gracefully to streaming simulator
+          if (['not-allowed', 'language-not-supported', 'service-not-allowed', 'network', 'audio-capture'].includes(event.error)) {
+            console.log('[MIC] Falling back to streaming simulator due to STT error:', event.error);
+            SpeechEngine.startFallbackSimulator(language, onPartialResult, onFinalResult);
           }
         };
 
         rec.onend = () => {
+          console.log('[MIC] Native SpeechRecognition ended');
           SpeechEngine.isListening = false;
         };
 
         rec.start();
+        console.log(`[MIC] Native SpeechRecognition started with language: ${rec.lang}`);
         SpeechEngine.recognition = rec;
         SpeechEngine.isListening = true;
         return;
       } catch (err) {
-        console.warn('SpeechRecognition start failed, using streaming simulator:', err);
+        console.warn('[MIC] SpeechRecognition start failed, falling back to simulator:', err);
       }
     }
 
-    // Fallback streaming simulator for environments without native speech recognizer permission
+    SpeechEngine.startFallbackSimulator(language, onPartialResult, onFinalResult);
+  }
+
+  /**
+   * Streaming simulator fallback for offline environments or browsers lacking native recognition.
+   */
+  private static startFallbackSimulator(
+    language: LanguageCode,
+    onPartialResult: (text: string) => void,
+    onFinalResult: (text: string) => void
+  ): void {
+    if (SpeechEngine.fallbackTimer) {
+      clearInterval(SpeechEngine.fallbackTimer);
+      SpeechEngine.fallbackTimer = null;
+    }
+
     SpeechEngine.isListening = true;
+    console.log(`[MIC] Streaming STT Simulator active for language [${language}]`);
     const defaultSamplePhrases: Record<LanguageCode, string[]> = {
       mr: ['मी सुरक्षित ठिकाणी पोहोचलो आहे', 'आम्हाला पिण्याच्या पाण्याची गरज आहे', 'मला त्वरित मदत हवी आहे'],
       hi: ['मैं सुरक्षित स्थान पर पहुँच गया हूँ', 'हमें तुरंत पीने के पानी की जरूरत है', 'मुझे सहायता चाहिए'],

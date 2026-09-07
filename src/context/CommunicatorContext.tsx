@@ -614,6 +614,7 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     });
 
     const unsubPackets = ConnectionManager.subscribePackets((packet) => {
+      console.log(`[REMOTE-SINK] Incoming packet received from sender: ${packet.senderDeviceId}, text: "${packet.textPayload}", translated: "${packet.translatedText}"`);
       if (packet.senderDeviceId !== localDevice.deviceId) {
         setMessages((prev) => {
           if (prev.some((m) => m.messageId === packet.messageId)) return prev;
@@ -633,6 +634,7 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
           statusText: `Receiving packet from ${packet.senderDeviceId}...`,
         });
 
+        console.log(`[REMOTE-SINK] Triggering SpeechEngine.speak for incoming text in ${packet.targetLanguage}...`);
         playVoicePacket(packet);
 
         setTimeout(() => {
@@ -750,22 +752,44 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     );
 
     // Start speech recognition
+    console.log(`[MIC] Starting speech recognition bridge for language: ${sourceLanguage}`);
     SpeechEngine.startListening({
       language: sourceLanguage,
       continuous: false,
       onPartialResult: (text) => {
+        console.log(`[CONTEXT] STT onPartialResult: "${text}"`);
         fsmDispatch({ type: 'SET_PARTIAL_TRANSCRIPT', text });
       },
       onFinalResult: (text) => {
+        console.log(`[CONTEXT] STT onFinalResult: "${text}"`);
         fsmDispatch({ type: 'SET_PARTIAL_TRANSCRIPT', text });
       },
       onError: (err) => {
+        console.warn(`[CONTEXT] STT onError banner: ${err}`);
         fsmDispatch({
           type: 'SET_STATUS_BANNER',
           text: err,
         });
       },
     });
+  };
+
+  /**
+   * Directly handles an incoming transcript, formats it, and triggers immediate encoding & transmission.
+   */
+  const handleTranscript = (transcriptText: string, isEmergency: boolean = false, sttLatencyMs: number = 120) => {
+    console.log(`[CONTEXT] handleTranscript called with text: "${transcriptText}" (Emergency: ${isEmergency})`);
+    const formatted = SentenceBoundaryDetector.formatSentence(
+      transcriptText,
+      ['hi', 'mr'].includes(sourceLanguage)
+    );
+    return dispatchVoiceMessage(
+      formatted,
+      sourceLanguage,
+      targetLanguage,
+      isEmergency ? 'CRITICAL' : 'NORMAL',
+      sttLatencyMs
+    );
   };
 
   /**
@@ -893,10 +917,13 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     };
 
     // 3. Encode into binary representation with CRC32
+    console.log(`[CONTEXT] Encoding VoicePacket (${candidatePacket.messageId}) into binary frame...`);
     const encodedBytes = PacketCodec.encode(candidatePacket);
+    console.log(`[CONTEXT] PacketCodec.encode output size: ${encodedBytes.length} bytes. Verifying decode...`);
     const decodedPacket = PacketCodec.decode(encodedBytes);
 
     if (!decodedPacket) {
+      console.error(`[CONTEXT] Failed to decode newly encoded packet (${candidatePacket.messageId})!`);
       fsmDispatch({
         type: 'TRANSITION_ERROR',
         error: 'CRC Checksum Validation Failed',
@@ -963,16 +990,18 @@ export const CommunicatorProvider: React.FC<{ children: ReactNode }> = ({ childr
     }));
 
     // Broadcast across mesh via ConnectionManager and BroadcastChannel
+    console.log(`[TRANSPORT-EXIT] Emitting binary packet frame (${encodedBytes.length}B) over ConnectionManager...`);
     ConnectionManager.sendPacket(finalizedPacket);
 
     if (broadcastChannelRef.current) {
       try {
+        console.log(`[TRANSPORT-EXIT] Broadcasting to fallback BroadcastChannel...`);
         broadcastChannelRef.current.postMessage({
           type: 'VOICE_PACKET',
           packet: finalizedPacket,
         });
-      } catch {
-        // Ignore
+      } catch (err) {
+        console.warn('[TRANSPORT-EXIT] BroadcastChannel postMessage error:', err);
       }
     }
 
