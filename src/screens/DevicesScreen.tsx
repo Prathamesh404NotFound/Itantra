@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useCommunicator } from '../context/CommunicatorContext';
 import { TransportType, DeviceInfo } from '../types';
+import { DirectConnectModal } from '../dialogs/DirectConnectModal';
 import {
   Wifi,
   Bluetooth,
@@ -11,6 +12,8 @@ import {
   ShieldCheck,
   Smartphone,
   SlidersHorizontal,
+  QrCode,
+  Network,
 } from 'lucide-react';
 
 export const DevicesScreen: React.FC = () => {
@@ -25,6 +28,8 @@ export const DevicesScreen: React.FC = () => {
     localDevice,
     setShowTwoPhonesGuide,
   } = useCommunicator();
+
+  const [showDirectConnectModal, setShowDirectConnectModal] = useState<boolean>(false);
 
   return (
     <div id="screen_devices" className="space-y-3.5 sm:space-y-4">
@@ -126,7 +131,14 @@ export const DevicesScreen: React.FC = () => {
             </div>
             <div className="text-xs text-[#6B625B]">Direct ad-hoc peer-to-peer connection</div>
           </div>
-          <div className="flex items-center gap-2 self-end min-[480px]:self-auto">
+          <div className="flex flex-wrap items-center gap-2 self-end min-[480px]:self-auto">
+            <button
+              onClick={() => setShowDirectConnectModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] rounded-xl bg-[#FCEEE8] hover:bg-[#F9DFD5] border border-[#C7512E]/30 text-xs font-bold text-[#C7512E] transition-colors shadow-2xs"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>IP / QR Connect</span>
+            </button>
             <button
               onClick={() => setShowTwoPhonesGuide(true)}
               className="px-2.5 py-1.5 min-h-[34px] rounded-xl bg-[#FAF7F2] hover:bg-[#F4ECE4] border border-[#E8E0D5] text-xs font-bold text-[#26211E] transition-colors"
@@ -274,6 +286,12 @@ export const DevicesScreen: React.FC = () => {
           })}
         </div>
       </div>
+
+      {/* Direct IP and QR Code Modal */}
+      <DirectConnectModal
+        isOpen={showDirectConnectModal}
+        onClose={() => setShowDirectConnectModal(false)}
+      />
     </div>
   );
 };
